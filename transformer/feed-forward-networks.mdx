@@ -1,0 +1,166 @@
+---
+title: "Feed-Forward Networks: The Memory of Transformers"
+description: "How feed-forward networks store factual knowledge inside Transformer layers, why they expand then contract, and what role they play in LLM capability."
+---
+
+Every Transformer block contains two major components: multi-head attention, which routes information between tokens, and a feed-forward network (FFN), which processes each token's representation independently. While attention gets most of the conceptual attention, the FFN is where the majority of a large model's parameters live — and where much of its factual knowledge is stored. Understanding the FFN is essential to understanding why scaling LLMs works and how they actually store what they know.
+
+## What is a feed-forward network?
+
+A feed-forward network in a Transformer is a simple two-layer fully connected neural network applied independently to each position in the sequence. It takes the output of the attention layer, transforms it through a large hidden dimension, applies a non-linearity, and projects it back down. The same weight matrices are applied to every position — it is position-wise, not sequence-wise.
+
+The mathematical form is:
+
+```
+FFN(x) = max(0, x · W₁ + b₁) · W₂ + b₂
+```
+
+With GELU activation (used in GPT-2 and most modern LLMs):
+
+```
+FFN(x) = GELU(x · W₁ + b₁) · W₂ + b₂
+```
+
+Here `x` has shape `(seq_len, d_model)`, `W₁` has shape `(d_model, d_ff)`, and `W₂` has shape `(d_ff, d_model)`. The output has the same shape as the input.
+
+<Note>
+  GPT-2 introduced GELU (Gaussian Error Linear Unit) as a replacement for ReLU in the FFN. GELU is smoother than ReLU — it does not hard-zero negative inputs but attenuates them softly, which tends to improve training dynamics. Nearly all modern LLMs (GPT-3/4, LLaMA, Mistral, Gemma) now use GELU or a variant like SwiGLU instead of vanilla ReLU.
+</Note>
+
+## A real-world analogy
+
+Think of the attention mechanism as a librarian who decides which books to pull from the shelves based on your query — it routes the right information from other positions to the current one. The feed-forward network is then the reader who actually processes the information and extracts the relevant facts from those books. Attention decides *what to look at*; the FFN decides *what to make of it*.
+
+The FFN also acts like a key-value memory store. Research (Geva et al., 2021) showed that individual neurons in the FFN activate for specific concepts and linguistic patterns. The first weight matrix `W₁` acts as a set of keys that pattern-match against the input, and `W₂` acts as a set of values that retrieve the associated content.
+
+## Where the FFN sits in a Transformer
+
+Inside each Transformer block, the FFN comes immediately after multi-head attention:
+
+1. Multi-head self-attention
+2. Residual connection + layer normalization
+3. **Feed-forward network** ← here
+4. Residual connection + layer normalization
+
+The FFN is applied to each position independently and in parallel — there is no interaction between positions inside the FFN itself. Interaction between positions only happens in the attention step.
+
+## How the FFN processes a token step by step
+
+<Steps>
+  <Step title="Receive the attention output">
+    The FFN receives a single vector of size `d_model` — the output of the attention sub-layer for one token position after the residual connection and layer norm.
+  </Step>
+  <Step title="Expand to the hidden dimension">
+    The input vector is multiplied by `W₁` (shape `d_model × d_ff`) and a bias `b₁` is added. This projects the representation from `d_model` up to `d_ff`, typically four times larger. The result is a hidden vector of size `d_ff`.
+  </Step>
+  <Step title="Apply the non-linearity">
+    An activation function — ReLU or GELU — is applied element-wise to the hidden vector. ReLU zeros out negative values; GELU softly attenuates them. This introduces the non-linearity that allows the network to learn complex, non-linear functions.
+  </Step>
+  <Step title="Contract back to d_model">
+    The activated hidden vector is multiplied by `W₂` (shape `d_ff × d_model`) and bias `b₂` is added. This projects back down to `d_model`, giving an output vector of the same size as the input.
+  </Step>
+  <Step title="Residual connection and layer norm">
+    The FFN output is added to the original input (residual connection) and passed through layer normalization before being forwarded to the next block.
+  </Step>
+</Steps>
+
+## The expand-then-contract pattern
+
+The most distinctive feature of the FFN is its shape: it expands to a large hidden dimension and then contracts back. In the original Transformer and in most LLMs, the ratio is:
+
+```
+d_ff = 4 × d_model
+```
+
+For example:
+- `d_model = 512` → `d_ff = 2048` → output `512`
+- `d_model = 1024` → `d_ff = 4096` → output `1024`
+- `d_model = 12288` (GPT-3) → `d_ff = 49152` → output `12288`
+
+<Tip>
+  The 4× expansion ratio is a design convention from the original Transformer paper, not a hard constraint. Some models use different ratios — LLaMA uses a ratio closer to 2.67× with a gated linear unit (SwiGLU), which requires a third weight matrix but achieves better performance per parameter. Mistral and Gemma follow a similar pattern.
+</Tip>
+
+## Why expand and then contract?
+
+The expansion creates a high-dimensional intermediate space where the model can perform complex transformations. In the expanded space, features that were entangled in `d_model` dimensions can be disentangled and recombined. The non-linearity then selects which combinations are relevant. Contracting back ensures the output fits back into the model's standard representation dimension.
+
+A useful way to think about it: the expansion gives the network more "working memory" to perform a computation, and the contraction summarizes the result back into the standard format that the rest of the model expects.
+
+## What does the FFN actually learn?
+
+Attention handles the relational structure of language — which tokens are relevant to which. The FFN handles factual associations. Research has shown that:
+
+- Individual neurons in the FFN activate reliably for specific semantic concepts (e.g., a neuron that fires when the current token is a country name, or when the context involves currency).
+- The FFN can be interpreted as a key-value memory: the rows of `W₁` are keys that match input patterns, and the corresponding rows of `W₂` are values that add information to the output.
+- Factual recall in LLMs — knowing that Paris is the capital of France — is largely mediated by FFN layers, not attention layers.
+
+This is why increasing FFN width (and therefore parameter count) consistently improves factual accuracy and world-knowledge benchmarks.
+
+## How much of the model is the FFN?
+
+The FFN accounts for a large majority of parameters in modern LLMs. Consider GPT-3 (175B parameters):
+
+- Each FFN layer has two matrices: `W₁` of size `(d_model, d_ff)` and `W₂` of size `(d_ff, d_model)`.
+- With `d_model = 12288` and `d_ff = 49152`, each matrix has ~600M parameters.
+- Two matrices per layer × 96 layers = ~115B parameters in FFN alone, roughly 2/3 of the total model.
+
+The attention layers, by contrast, hold the remaining ~1/3. This means when you hear about "scaling LLMs," most of the new parameters added are FFN weights — the model's factual memory grows more than its relational reasoning capacity.
+
+## Feed-forward networks in Mixture of Experts
+
+The Mixture of Experts (MoE) architecture replaces the single FFN in each Transformer block with multiple FFN "experts" — typically 8, 16, or more. A learned router selects a small subset (often 2) of these experts for each token. The token is processed only by the selected experts, and their outputs are combined.
+
+This allows the model to have a much larger total parameter count (and therefore more knowledge capacity) while keeping the computation per token roughly constant. Mixtral 8×7B, for example, has 46B total parameters but only activates ~13B for each token. The key insight is that different experts can specialize in different domains or types of knowledge, effectively giving each token access to the most relevant parts of the model's memory.
+
+## Python implementation
+
+```python
+import numpy as np
+
+def relu(x):
+    return np.maximum(0, x)
+
+def gelu(x):
+    """Gaussian Error Linear Unit — smoother than ReLU."""
+    return 0.5 * x * (1 + np.tanh(np.sqrt(2 / np.pi) * (x + 0.044715 * x**3)))
+
+def feed_forward_network(x, W1, b1, W2, b2, activation='gelu'):
+    """
+    FFN as used in Transformer blocks.
+    x:  input of shape (seq_len, d_model)
+    W1: (d_model, d_ff)  — expand
+    W2: (d_ff,   d_model) — contract
+    """
+    # Expand: d_model → d_ff (typically 4× expansion)
+    hidden = x @ W1 + b1   # shape: (seq_len, d_ff)
+
+    # Non-linearity
+    if activation == 'relu':
+        hidden = relu(hidden)
+    else:
+        hidden = gelu(hidden)
+
+    # Contract: d_ff → d_model
+    output = hidden @ W2 + b2  # shape: (seq_len, d_model)
+
+    return output
+
+# Example dimensions
+d_model, d_ff, seq_len = 512, 2048, 10
+
+W1 = np.random.randn(d_model, d_ff) * 0.02
+b1 = np.zeros(d_ff)
+W2 = np.random.randn(d_ff, d_model) * 0.02
+b2 = np.zeros(d_model)
+
+x = np.random.randn(seq_len, d_model)
+output = feed_forward_network(x, W1, b1, W2, b2)
+
+print(f"Input shape:  {x.shape}")       # (10, 512)
+print(f"Output shape: {output.shape}")  # (10, 512)
+```
+
+## Why FFNs are so important
+
+The FFN is not a secondary component that exists to satisfy some theoretical requirement — it is one of the two pillars of the Transformer, and in terms of raw parameter count, the larger one. Removing FFN layers while keeping attention intact produces a dramatically weaker model. The two components are complementary: attention is the model's mechanism for contextual reasoning across tokens, and the FFN is its repository of stored knowledge. Every time an LLM correctly recalls a fact, produces idiomatic language, or applies domain-specific reasoning, the FFN layers are doing much of that work.

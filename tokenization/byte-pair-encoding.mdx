@@ -1,0 +1,190 @@
+---
+title: "Byte Pair Encoding: The Tokenization Algorithm Behind LLMs"
+description: "Understand how BPE builds a subword vocabulary by merging frequent character pairs — the tokenization algorithm behind GPT, LLaMA, and most modern LLMs."
+---
+
+Before GPT-2 generates a single word, it runs your input through a Byte Pair Encoding tokenizer that was trained on billions of characters of text. BPE started as a lossless data compression algorithm in 1994, but when researchers adapted it for NLP in 2015, it solved one of the hardest problems in language modeling: how to build a vocabulary that handles any word — including ones that were never seen during training — without making sequences impossibly long.
+
+## The problem BPE solves
+
+Every tokenization strategy is a compromise. The two naive approaches both fail in practice.
+
+**Character-level tokenization** can represent any text, because every word is just a sequence of characters. But sequences become very long — the word `"tokenization"` becomes 12 tokens — and the model has to learn that the characters `t`, `o`, `k`, `e`, `n` in sequence mean something, rather than encoding that knowledge directly in the vocabulary.
+
+**Word-level tokenization** keeps sequences short and tokens semantically meaningful, but it breaks down as soon as the model encounters a word it has not seen before. A word-level tokenizer trained on English news articles will produce an `[UNK]` token for any medical term, proper noun, or misspelling that was not in the training corpus. It also wastes vocabulary space by storing `run`, `runs`, `running`, and `runner` as four separate entries with no shared structure.
+
+**Subword tokenization** with BPE finds a middle ground. Common words — `the`, `is`, `you` — become single tokens. Rare or compound words are split into meaningful subword pieces that appear across many different words. The word `"tokenization"` might become `["token", "ization"]`, reusing pieces that also appear in `"realization"` and `"normalization"`. Any word can be represented, and frequently occurring patterns are encoded efficiently.
+
+<Note>
+  GPT-2, GPT-3, GPT-4, and LLaMA all use variants of BPE. GPT models use the original BPE algorithm on UTF-8 bytes. LLaMA uses SentencePiece BPE. BERT and its derivatives use WordPiece, which is closely related but uses a different scoring function for deciding which pairs to merge.
+</Note>
+
+## What BPE is
+
+Byte Pair Encoding is a greedy vocabulary-building algorithm. Given a training corpus, it starts with the smallest possible units — individual characters or bytes — and iteratively merges the most frequent adjacent pair into a single new token. This continues until the vocabulary reaches a target size.
+
+The result is a vocabulary and an ordered list of merge rules. The merge rules encode the algorithm's learned decisions about which character sequences are common enough to deserve their own token. When the tokenizer later encounters new text, it applies these rules in order to produce a token sequence.
+
+## How BPE builds its vocabulary
+
+<Steps>
+  <Step title="Initialize the character vocabulary">
+    Split every word in the training corpus into individual characters. Add an end-of-word marker (commonly `</w>`) to the last character of each word to help the tokenizer distinguish word boundaries. Count how many times each word appears.
+
+    For the corpus `"low lower newest widest"`, the initial vocabulary representation is:
+
+    ```
+    l o w </w>        (frequency: 1)
+    l o w e r </w>    (frequency: 1)
+    n e w e s t </w>  (frequency: 1)
+    w i d e s t </w>  (frequency: 1)
+    ```
+
+    The base vocabulary contains every unique character that appears: `{l, o, w, e, r, n, s, t, i, d, </w>}`.
+  </Step>
+  <Step title="Count all adjacent pairs">
+    Scan through every word and count how often each adjacent pair of symbols appears, weighted by word frequency.
+
+    ```
+    ('e', 's'): 2    # appears in "newest" and "widest"
+    ('s', 't'): 2    # appears in "newest" and "widest"
+    ('l', 'o'): 2    # appears in "low" and "lower"
+    ('o', 'w'): 2    # appears in "low" and "lower"
+    ('e', 'r'): 1
+    ('n', 'e'): 1
+    ('w', 'e'): 1
+    ...
+    ```
+
+    Multiple pairs are tied at frequency 2. BPE picks one deterministically (usually the first tie encountered, or alphabetically).
+  </Step>
+  <Step title="Merge the most frequent pair">
+    Merge the chosen pair everywhere it appears in the corpus. The two symbols become one. Add the merged symbol to the vocabulary and record the merge rule.
+
+    Merging `('e', 's')` → `es`:
+
+    ```
+    l o w </w>          (no change)
+    l o w e r </w>      (no change)
+    n e w es t </w>     ("es" merged)
+    w i d es t </w>     ("es" merged)
+    ```
+
+    Vocabulary now includes `es`. Merge rule #1: `e s → es`.
+  </Step>
+  <Step title="Repeat until the vocabulary reaches target size">
+    Recount pairs on the updated corpus and merge again. Continue until you have performed the desired number of merges.
+
+    Next merge — `('es', 't')` → `est`:
+
+    ```
+    l o w </w>
+    l o w e r </w>
+    n e w est </w>
+    w i d est </w>
+    ```
+
+    Vocabulary adds `est`. Merge rule #2: `es t → est`.
+
+    This continues for hundreds or thousands of steps. Typical LLM vocabularies are built with 30,000–100,000 merges, starting from ~256 base byte symbols.
+  </Step>
+</Steps>
+
+The complete example walkthrough:
+
+```
+Training corpus: "low lower newest widest"
+
+Step 1: Initial character-level representation
+l-o-w, l-o-w-e-r, n-e-w-e-s-t, w-i-d-e-s-t
+
+Step 2: Count pairs
+('e','s'): 2, ('s','t'): 2, ('l','o'): 2, ('o','w'): 2, ...
+
+Step 3: Merge most frequent pair → ('e','s') → 'es'
+l-o-w, l-o-w-e-r, n-e-w-es-t, w-i-d-es-t
+
+Step 4: Recount pairs
+('es','t'): 2, ('l','o'): 2, ('o','w'): 2, ...
+
+Step 5: Merge → ('es','t') → 'est'
+l-o-w, l-o-w-e-r, n-e-w-est, w-i-d-est
+
+Step 6: Continue merging...
+('l','o') → 'lo', ('lo','w') → 'low', ...
+```
+
+## The BPE merge algorithm in Python
+
+The core logic of BPE training can be expressed in a small number of functions:
+
+```python
+def get_pairs(vocab):
+    """Get all adjacent symbol pairs and their frequencies."""
+    pairs = {}
+    for word, freq in vocab.items():
+        symbols = word.split()
+        for i in range(len(symbols) - 1):
+            pair = (symbols[i], symbols[i+1])
+            pairs[pair] = pairs.get(pair, 0) + freq
+    return pairs
+
+def merge_vocab(pair, vocab):
+    """Merge the most frequent pair in the vocabulary."""
+    new_vocab = {}
+    bigram = ' '.join(pair)
+    replacement = ''.join(pair)
+    for word in vocab:
+        new_word = word.replace(bigram, replacement)
+        new_vocab[new_word] = vocab[word]
+    return new_vocab
+
+# BPE training loop
+num_merges = 10
+for i in range(num_merges):
+    pairs = get_pairs(vocab)
+    best_pair = max(pairs, key=pairs.get)
+    vocab = merge_vocab(best_pair, vocab)
+```
+
+`get_pairs` counts every adjacent pair across all words in the current vocabulary. `merge_vocab` applies the winning merge by replacing the space-separated bigram with the concatenated form everywhere it appears. The loop runs until the desired number of merges is complete.
+
+## How BPE tokenizes new text
+
+After training, the tokenizer stores two things: the base vocabulary and the ordered list of merge rules. To tokenize a new string:
+
+1. Split the input into characters (or bytes, for byte-level BPE)
+2. Apply the merge rules in the order they were learned, from first merge to last
+3. Stop when no remaining adjacent pair matches a merge rule, or when all applicable rules have been applied
+
+This is a greedy left-to-right scan. The first merge rule has the highest priority because it was learned from the most frequent pair. Later rules fill in increasingly rare subword combinations.
+
+For example, given the merge rules learned above, the word `"newest"` would be tokenized as:
+
+```
+n e w e s t        # start: all characters
+n e w es t         # apply merge 1: e s → es
+n e w est          # apply merge 2: es t → est
+n ew est           # apply later merge: e w → ew (if learned)
+new est            # apply later merge: n ew → new (if learned)
+```
+
+The final token sequence is `["new", "est"]`.
+
+## Why BPE is used in modern LLMs
+
+<Tip>
+  Vocabulary size is a significant design decision. A vocabulary that is too small (say, 1,000 tokens) produces very long sequences and forces the model to work harder to compose meaning from fragments. A vocabulary that is too large (say, 500,000 tokens) inflates the embedding matrix and the output projection layer, adding billions of parameters with diminishing returns. Most production LLMs settle on 32,000–128,000 tokens as a practical range.
+</Tip>
+
+BPE became the standard tokenization algorithm for large language models for several reasons:
+
+**Graceful handling of rare words.** A word that was never seen during training can always be decomposed into known subword pieces. The model may not know the word `"hyperparametrization"` as a unit, but it likely knows `"hyper"`, `"parameter"`, and `"ization"` — and can compose a reasonable representation from those.
+
+**Cross-language generalization.** Subword pieces from one language often overlap with another, especially for languages that share roots or borrow vocabulary. A multilingual BPE tokenizer trained on many languages simultaneously produces shared subword representations that help the model transfer knowledge across languages.
+
+**Fixed vocabulary, bounded computation.** Because the vocabulary size is determined before training and never changes, the model's architecture is fully determined before a single gradient step. Embedding matrices, attention projections, and output layers all have fixed dimensions.
+
+**Reproducibility.** Given the same training corpus and target vocabulary size, BPE always produces the same vocabulary and the same merge rules. This makes tokenizers deterministic and easy to version.
+
+These properties — combined with its simplicity and efficiency — explain why GPT-2's BPE tokenizer, first released in 2019, remains the basis for tokenization in the most capable language models available today.

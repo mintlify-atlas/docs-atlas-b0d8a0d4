@@ -1,0 +1,145 @@
+---
+title: "KV Cache: Eliminating Repeated Attention Computation in LLMs"
+description: "Learn how KV Cache eliminates repeated attention computation during LLM inference, trading memory for dramatic speedups in autoregressive generation."
+---
+
+Without KV Cache, generating a 100-token response from an LLM requires the model to reprocess every preceding token at each step — a total of 1 + 2 + 3 + ... + 100 = 5,050 attention computations. KV Cache eliminates this redundancy by storing the Key and Value matrices computed for past tokens and reusing them on every subsequent step, reducing generation to a single attention computation per new token.
+
+## How LLMs generate text
+
+LLMs are autoregressive: they produce one token at a time, and each new token is conditioned on all previous tokens. To generate token N, the model runs a full forward pass over all N-1 preceding tokens. This is not a quirk — it is how the model attends to context — but it creates a serious scaling problem.
+
+Generating a sequence of length T requires T forward passes. Without any optimization, the total number of attention operations grows as O(T²). For a 1,000-token response, that is roughly 500,000 attention computations. At inference time, this directly translates to latency.
+
+## What happens inside the model
+
+Inside each Transformer attention layer, three matrices are computed from the input token embeddings:
+
+- **Query (Q):** "What is this token looking for?"
+- **Key (K):** "What does each token offer as a search target?"
+- **Value (V):** "What information does each token carry?"
+
+When generating token N, the model computes Q, K, and V for all N tokens in the current sequence. But for tokens 1 through N-1 — the prefix — K and V are **identical** to what was computed in the previous step. Nothing about a past token changes between steps. Recomputing K and V for the prefix on every forward pass is pure wasted work.
+
+<Note>
+  LLM generation has two distinct phases:
+
+  - **Prefill:** The prompt (all input tokens) is processed in a single forward pass. K and V are computed for every prompt token and stored in the cache.
+  - **Decode:** One new token is generated per step. Only the new token's K and V are computed; everything else is read from the cache.
+
+  Prefill is compute-bound (processing many tokens in parallel). Decode is memory-bandwidth-bound (reading from the KV Cache on each step).
+</Note>
+
+## The KV Cache solution
+
+<Steps>
+  <Step title="Prefill — populate the cache">
+    Run a single forward pass over the entire prompt. For every attention layer, compute K and V for each prompt token and store them in the cache. This is the only time K and V are computed for these tokens.
+  </Step>
+  <Step title="Decode step 1 — process the first new token">
+    Take the last token from the prompt (or the first generated token). Compute Q, K, and V only for this single token. Append the new K and V to the cache, then compute attention using Q from the new token against the full cached K and V sequence.
+  </Step>
+  <Step title="Decode step N — reuse and extend">
+    On every subsequent step, only the latest token is processed. Its Q is computed fresh. Its K and V are appended to the cache. Attention runs over the growing cached sequence. The model never recomputes K or V for any token it has already seen.
+  </Step>
+  <Step title="Stop at EOS">
+    Generation continues until the model produces an end-of-sequence token or the maximum length is reached. The cache is then discarded or returned to a memory pool.
+  </Step>
+</Steps>
+
+## Why only K and V are cached, not Q
+
+Q represents what the **current** token is asking about. It is a function of the current decoding step and has no meaning outside of it — each step has its own Q, computed fresh from the latest token. Caching Q would serve no purpose because it is never reused.
+
+K and V represent what **past** tokens offer: their identity as lookup targets and the information they carry. These are properties of the tokens themselves and do not change regardless of how many new tokens are generated afterward. Once computed, they remain valid for the entire sequence.
+
+## Implementation
+
+```python
+class KVCache:
+    """Simplified KV Cache for autoregressive generation."""
+    
+    def __init__(self):
+        self.key_cache = []    # List of K matrices, one per layer
+        self.value_cache = []  # List of V matrices, one per layer
+    
+    def update(self, layer_idx, new_keys, new_values):
+        """Add new K, V for the latest token to the cache."""
+        if layer_idx >= len(self.key_cache):
+            self.key_cache.append(new_keys)
+            self.value_cache.append(new_values)
+        else:
+            # Concatenate along sequence dimension
+            import numpy as np
+            self.key_cache[layer_idx] = np.concatenate(
+                [self.key_cache[layer_idx], new_keys], axis=-2
+            )
+            self.value_cache[layer_idx] = np.concatenate(
+                [self.value_cache[layer_idx], new_values], axis=-2
+            )
+    
+    def get(self, layer_idx):
+        """Retrieve cached K and V for a layer."""
+        return self.key_cache[layer_idx], self.value_cache[layer_idx]
+
+
+def generate_with_kv_cache(model, prompt_tokens, max_new_tokens=50):
+    """
+    Autoregressive generation using KV Cache.
+    
+    Without KV Cache: O(n²) total work for n tokens.
+    With KV Cache: O(n) total work — process each new token once.
+    """
+    kv_cache = KVCache()
+    
+    # Prefill: process the entire prompt at once
+    output_tokens = list(prompt_tokens)
+    kv_cache = model.prefill(prompt_tokens, kv_cache)
+    
+    # Decode: generate one new token at a time
+    for _ in range(max_new_tokens):
+        # Only process the LATEST token (fast!)
+        latest_token = output_tokens[-1]
+        next_token, kv_cache = model.decode_one_step(latest_token, kv_cache)
+        output_tokens.append(next_token)
+        
+        if next_token == model.eos_token_id:
+            break
+    
+    return output_tokens
+```
+
+## How much faster does it get
+
+The speedup is substantial and grows with sequence length. Without KV Cache, generating a sequence of length T requires recomputing attention over 1 + 2 + ... + T = T(T+1)/2 token-steps — O(T²) total work. With KV Cache, each decode step processes exactly one new token: O(T) total work.
+
+For a 1,000-token generation:
+- Without cache: ~500,000 attention operations
+- With cache: ~1,000 attention operations
+- Effective speedup: ~500×
+
+In practice, the realized speedup depends on hardware memory bandwidth and batch size, but KV Cache consistently reduces decode latency from seconds to milliseconds for typical sequence lengths.
+
+## The trade-off: speed vs memory
+
+KV Cache is not free. The cache must be held in GPU memory for the entire duration of a request, and its size grows with every token generated.
+
+The memory footprint per request is:
+
+```
+KV Cache memory = 2 × num_layers × num_heads × head_dim × seq_len × bytes_per_element
+```
+
+For LLaMA-2 70B (80 layers, fp16):
+- Per 1,000 tokens: ~1 GB
+- For a 4,096-token context: ~4 GB just for KV Cache
+
+<Warning>
+  KV Cache memory grows **linearly with sequence length**. Serving long-context requests (32K, 128K tokens) can consume tens of gigabytes per request. At high concurrency, this exhausts GPU memory long before compute is saturated — which is exactly the problem that Paged Attention was designed to solve.
+</Warning>
+
+The memory cost is the primary constraint on how many requests an LLM server can handle simultaneously. Naive allocation — reserving the full maximum-sequence-length block upfront for each request — wastes enormous amounts of GPU memory when most requests are short.
+
+---
+
+To understand how production LLM servers manage this memory efficiently, see [Paged Attention](/inference/paged-attention).

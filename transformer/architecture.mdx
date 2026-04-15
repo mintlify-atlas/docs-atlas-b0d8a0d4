@@ -1,0 +1,181 @@
+---
+title: "Transformer Architecture: How Modern LLMs Are Built"
+description: "A deep dive into the Transformer architecture — from tokenization and positional encoding to multi-head attention and the three major model variants."
+---
+
+The Transformer architecture, introduced in the 2017 paper "Attention Is All You Need," is the foundation of every modern large language model. Understanding it from the ground up — why it was needed, what each component does, and how data flows through it — gives you the mental model to reason about GPT, BERT, T5, and the entire family of models built on this design.
+
+<Note>
+  The original Transformer was introduced by Vaswani et al. in **"Attention Is All You Need"** (2017). Every major LLM today — GPT-4, Gemini, Claude, LLaMA — is built on this architecture or a direct descendant of it.
+</Note>
+
+## Why the Transformer was needed
+
+Before Transformers, sequence modelling relied on Recurrent Neural Networks (RNNs) and their improved variant, LSTMs. These architectures processed sequences one token at a time — to compute the hidden state at position 5, you first had to compute positions 1 through 4. This sequential dependency made training slow and impossible to fully parallelize across modern GPU hardware.
+
+The deeper problem was long-range dependencies. When a word at position 100 depends on context at position 2, the gradient signal has to travel back through 98 time steps during training. At each step it is multiplied by a weight, and those repeated multiplications cause gradients to either shrink to near-zero (vanishing gradients) or explode. RNNs struggled to reliably learn relationships across long distances.
+
+Transformers solved both problems at once. Instead of processing tokens one by one, a Transformer looks at all positions simultaneously using the attention mechanism. Every token can directly attend to every other token in a single operation, regardless of distance. This makes training massively parallelizable and eliminates the vanishing gradient problem for long-range dependencies.
+
+## The two halves of the architecture
+
+The original Transformer is split into an **Encoder** and a **Decoder**. The encoder reads the input sequence and builds a rich contextual representation. The decoder generates the output sequence one token at a time, attending both to its own previous outputs and to the encoder's representations. Many modern models use only one half: BERT uses only the encoder, while GPT uses only the decoder.
+
+## Architecture components
+
+### Tokenization
+
+Before any neural computation, raw text must be converted into discrete tokens. A tokenizer (typically using Byte Pair Encoding) splits text like `"Hello world"` into a sequence of integer IDs, such as `[15496, 995]`. The vocabulary size is usually in the range of 32,000 to 100,000 tokens.
+
+### Token embeddings
+
+Each token ID is mapped to a dense vector via a learned lookup table — the embedding matrix. If the vocabulary has 50,000 tokens and the model dimension is `d_model = 512`, the embedding matrix has shape `(50000, 512)`. This converts a sequence of token IDs into a matrix of shape `(seq_len, d_model)`.
+
+### Positional encoding
+
+Attention operates on sets, not sequences — it has no built-in notion of order. To give the model information about where each token sits in the sequence, a positional encoding is added element-wise to the token embeddings. The original Transformer uses fixed sine and cosine patterns:
+
+```
+PE(pos, 2i)   = sin(pos / 10000^(2i / d_model))
+PE(pos, 2i+1) = cos(pos / 10000^(2i / d_model))
+```
+
+Each position gets a unique vector determined by these patterns. Tokens at different positions have different encodings, so after adding them to the token embeddings, the model can distinguish token order. Modern models often use learned positional embeddings or rotary position encodings (RoPE) instead.
+
+### Multi-head attention
+
+Attention is the core operation of the Transformer. Given queries `Q`, keys `K`, and values `V`, scaled dot-product attention computes:
+
+```
+Attention(Q, K, V) = softmax(Q · Kᵀ / √dₖ) · V
+```
+
+The query and key dot products measure how much each token should attend to every other token. Dividing by `√dₖ` prevents the dot products from growing too large when the dimension is high (large dot products push softmax into regions with near-zero gradients). The softmax converts scores into a probability distribution, and multiplying by `V` produces a weighted combination of value vectors.
+
+Multi-head attention runs `h` independent attention operations in parallel, each with its own learned projection matrices:
+
+```
+MultiHead(Q, K, V) = Concat(head₁, ..., headₕ) · W_O
+where head_i = Attention(Q · W_Q_i, K · W_K_i, V · W_V_i)
+```
+
+Different heads can learn to attend to different types of relationships — one head might focus on syntactic dependencies, another on coreference. Concatenating and projecting their outputs combines these perspectives.
+
+### Feed-forward network
+
+After attention, each position passes independently through a two-layer feed-forward network:
+
+```
+FFN(x) = max(0, x · W₁ + b₁) · W₂ + b₂
+```
+
+The hidden dimension `d_ff` is typically four times `d_model` (e.g., 512 → 2048 → 512). While attention routes information between positions, the FFN processes each position's representation individually, storing factual knowledge learned during training.
+
+### Residual connections and layer normalization
+
+Each sub-layer (attention and FFN) is wrapped in a residual connection:
+
+```
+output = LayerNorm(x + sublayer(x))
+```
+
+The residual `x + sublayer(x)` ensures that gradients can flow directly back to earlier layers without passing through the sub-layer's transformations. This is critical for training networks with many layers. Layer normalization then normalizes across the feature dimension, stabilizing activations throughout training.
+
+## How data flows through the entire architecture
+
+<Steps>
+  <Step title="Tokenize the input">
+    Raw text is split into tokens by the tokenizer. Each token is converted to an integer ID from the model's vocabulary.
+  </Step>
+  <Step title="Embed the tokens">
+    Each token ID is looked up in the embedding matrix to produce a dense vector of size `d_model`. The result is a matrix of shape `(seq_len, d_model)`.
+  </Step>
+  <Step title="Add positional encodings">
+    Positional encoding vectors are added element-wise to the token embeddings, injecting order information into the representations.
+  </Step>
+  <Step title="Pass through N Transformer blocks">
+    The sequence passes through a stack of identical Transformer blocks. In each block: multi-head self-attention runs first, its output is added to the residual and normalized, then the FFN runs, and its output is again added and normalized.
+  </Step>
+  <Step title="Project to vocabulary and sample">
+    After the final block, a linear layer projects each position's representation from `d_model` to the vocabulary size. Softmax converts these logits to probabilities, and the next token is sampled or selected greedily.
+  </Step>
+</Steps>
+
+## A simplified Transformer block in Python
+
+```python
+import numpy as np
+
+class TransformerBlock:
+    """Simplified Transformer encoder block."""
+
+    def __init__(self, d_model, num_heads, d_ff):
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.d_ff = d_ff
+        # In practice, these would be learned weight matrices:
+        # W_Q, W_K, W_V, W_O for multi-head attention
+        # W1, b1, W2, b2 for the feed-forward network
+
+    def layer_norm(self, x, eps=1e-6):
+        mean = x.mean(axis=-1, keepdims=True)
+        std = x.std(axis=-1, keepdims=True)
+        return (x - mean) / (std + eps)
+
+    def forward(self, x):
+        # 1. Multi-head self-attention + residual + layer norm
+        attn_out = self.multi_head_attention(x, x, x)  # Q=K=V=x (self-attention)
+        x = self.layer_norm(x + attn_out)              # Add & Norm
+
+        # 2. Feed-forward network + residual + layer norm
+        ffn_out = self.feed_forward(x)
+        x = self.layer_norm(x + ffn_out)               # Add & Norm
+
+        return x
+```
+
+## The three Transformer variants
+
+<Tabs>
+  <Tab title="Encoder-only (BERT)">
+    Encoder-only models process the entire input sequence bidirectionally — every token can attend to every other token, both left and right. This gives rich contextual representations but makes these models unsuitable for generation, since they see the whole sequence at once.
+
+    **Best for:** Text classification, named entity recognition, question answering, sentence embeddings, and any task where you need to understand an input rather than generate one.
+
+    **Examples:** BERT, RoBERTa, DeBERTa, ELECTRA.
+
+    During training, BERT uses masked language modelling: random tokens are replaced with a `[MASK]` token, and the model learns to predict them using bidirectional context. This forces the model to build deep understanding of language structure.
+  </Tab>
+  <Tab title="Decoder-only (GPT)">
+    Decoder-only models use causal (autoregressive) attention — each token can only attend to tokens that came before it in the sequence. This makes generation natural: the model predicts the next token given all previous tokens, and you simply keep sampling.
+
+    **Best for:** Text generation, code completion, dialogue, and any task that can be framed as "complete this prefix."
+
+    **Examples:** GPT-2, GPT-3, GPT-4, LLaMA, Mistral, Claude.
+
+    The causal mask is applied by setting future positions to `-∞` before the softmax, so those positions receive zero attention weight. During inference, tokens are generated one at a time, each fed back into the model as context for the next prediction.
+  </Tab>
+  <Tab title="Encoder-Decoder (T5, original Transformer)">
+    Encoder-decoder models use both halves of the original architecture. The encoder reads the entire input and builds a representation; the decoder generates the output attending to both the encoder's output (via cross-attention) and its own previous outputs (via causal self-attention).
+
+    **Best for:** Sequence-to-sequence tasks where input and output are different sequences — machine translation, summarization, question generation, text-to-SQL.
+
+    **Examples:** T5, BART, mT5, the original Transformer (Vaswani et al. 2017).
+
+    Cross-attention in the decoder works the same way as self-attention, except the queries come from the decoder's current state and the keys and values come from the encoder's output. This is how the decoder "reads" the source sequence while generating the target.
+  </Tab>
+</Tabs>
+
+## Why the Transformer is so powerful
+
+Several properties combine to make the Transformer the dominant architecture for language modelling:
+
+**Parallelism during training.** Because attention operates on all positions simultaneously, the entire sequence can be processed in one forward pass. This allows efficient use of GPU tensor cores and makes it practical to train on trillions of tokens.
+
+**Direct long-range attention.** Any two tokens are one attention operation apart, regardless of sequence length. There is no bottleneck that degrades with distance, unlike in RNNs where information has to be passed through many intermediate states.
+
+**Scalability.** Transformer performance scales predictably with model size, dataset size, and compute — a relationship formalized in neural scaling laws. Adding more layers, wider dimensions, and more data consistently improves results, which is why models have grown from 100M to hundreds of billions of parameters.
+
+**Expressiveness of multi-head attention.** Different attention heads specialize in different relationships — syntactic, semantic, co-referential. The model learns these specializations from data without any explicit supervision.
+
+**Transfer learning.** A Transformer pretrained on a large corpus develops broadly useful representations that can be fine-tuned to downstream tasks with relatively little labelled data, which is the basis of the entire pretrain-then-fine-tune paradigm.

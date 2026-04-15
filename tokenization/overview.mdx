@@ -1,0 +1,112 @@
+---
+title: "Tokenization in LLMs: How Text Becomes Token IDs"
+description: "Learn how tokenization converts raw text into integer token IDs, why LLMs require this step, and how vocabulary design affects model performance."
+---
+
+Before a large language model can process a single word, that word must be converted into a number. Tokenization is the process that makes this possible — it transforms raw text into a sequence of integers called token IDs, which the model can then work with mathematically. Without tokenization, there is no way for a neural network to reason about language.
+
+## What tokenization is
+
+A tokenizer takes a string of text and splits it into smaller units called tokens. Each token is then mapped to a unique integer in the model's vocabulary. The model never sees the original characters or words — it only sees these integer sequences.
+
+```python
+# Conceptual example of how a tokenizer maps text to token IDs
+text = "The quick brown fox"
+# After tokenization (example token IDs, not real):
+token_ids = [464, 2068, 7586, 21831]  # each word/subword maps to an integer
+# The model processes these integer sequences, not the raw text
+```
+
+A token is not always a full word. Depending on the tokenization strategy, a token might be a single character, a full word, or a subword fragment like `"quick"` being split into `"qui"` and `"ck"`. What counts as a token depends entirely on how the tokenizer was built.
+
+## Why tokenization is needed
+
+Neural networks operate on fixed-size numerical inputs. Raw text is an unbounded sequence of characters with no natural numerical representation. Tokenization bridges this gap by:
+
+- Converting text to integers the model can embed into continuous vector space
+- Defining a fixed vocabulary size so the model's input and output dimensions are bounded
+- Enabling the model to generalize across morphologically similar words (e.g., `run`, `running`, `runner` sharing subword pieces)
+
+Without tokenization, a model would need to process one character at a time — producing very long sequences — or treat every unique word as an atomic unit, which creates an unmanageable vocabulary and fails on any word not seen during training.
+
+## Tokenization strategies
+
+There are three main approaches to splitting text into tokens. Each makes a different trade-off between vocabulary size and sequence length.
+
+**Character-level tokenization** splits text into individual characters. The vocabulary is tiny (roughly 100–300 characters for most languages), but sequences become very long. A 100-word sentence might produce 500+ tokens, which is computationally expensive and makes it harder for the model to learn long-range dependencies.
+
+**Word-level tokenization** treats each word as one token. Sequences are short and tokens are semantically meaningful, but the vocabulary grows to hundreds of thousands of entries. Words not seen during training — out-of-vocabulary (OOV) words — cannot be represented at all. Morphological variants like `walk`, `walked`, and `walking` each consume a separate vocabulary slot with no shared representation.
+
+**Subword tokenization** sits between these extremes. Common words are kept as single tokens while rare words are split into smaller, reusable pieces. The vocabulary stays compact (typically 30,000–100,000 tokens), sequences remain short, and OOV words can always be approximated by combining known subword pieces.
+
+<Tip>
+  Most modern LLMs — including GPT-2, GPT-3, GPT-4, LLaMA, and Mistral — use subword tokenization. The dominant algorithms are Byte Pair Encoding (BPE), WordPiece (used in BERT), and SentencePiece (used in LLaMA and T5).
+</Tip>
+
+## Why subword tokenization dominates
+
+BPE and related algorithms construct a vocabulary by learning which character sequences appear frequently enough to deserve their own token. This produces a vocabulary that:
+
+- Handles rare and compound words by decomposing them into known subword units
+- Shares representations across morphological variants (common prefixes and suffixes become reusable tokens)
+- Works across languages without needing a separate tokenizer per language
+- Keeps vocabulary size bounded and predictable
+
+The result is a tokenizer that degrades gracefully on novel or foreign text rather than producing a stream of `[UNK]` (unknown) tokens.
+
+## How tokenization affects model performance
+
+Vocabulary size has a direct impact on model architecture. The embedding matrix — which maps each token ID to a dense vector — has dimensions `[vocabulary_size × embedding_dim]`. A larger vocabulary means a larger matrix, more parameters, and a larger final projection layer that outputs probability distributions over all possible next tokens.
+
+Context windows are measured in tokens, not characters or words. GPT-4 has a context window of 128,000 tokens. Whether 128,000 tokens corresponds to 100,000 words or 50,000 words depends on the tokenizer — a sentence in a language with many long compound words will consume more tokens than the same information in English.
+
+This also means that token efficiency varies across languages. English text tends to tokenize more efficiently than Chinese, Arabic, or agglutinative languages like Finnish, because the tokenizer is often trained on a predominantly English corpus.
+
+## The tokenization pipeline
+
+When text enters an LLM, it passes through a fixed sequence of steps before the model processes it.
+
+<Steps>
+  <Step title="Raw text input">
+    A string of text is passed to the tokenizer. This could be a user prompt, a document, or a full conversation history.
+  </Step>
+  <Step title="Tokenizer splits text into tokens">
+    The tokenizer applies its learned merge rules or vocabulary lookup to break the string into a list of token strings. For example, `"tokenization"` might become `["token", "ization"]`.
+  </Step>
+  <Step title="Tokens are mapped to token IDs">
+    Each token string is looked up in the vocabulary dictionary and replaced with its integer ID. The output is a list of integers, e.g. `[21978, 1634]`.
+  </Step>
+  <Step title="Token IDs are embedded into vectors">
+    The model looks up each token ID in its embedding matrix to retrieve a dense floating-point vector for that token. Each ID becomes a vector of several hundred or thousand dimensions.
+  </Step>
+  <Step title="Vectors are processed by the model">
+    The sequence of embedding vectors passes through the Transformer layers — attention, feed-forward networks, and normalization — to produce output predictions.
+  </Step>
+</Steps>
+
+## A practical example
+
+Consider the sentence `"Hello, world! How are you?"`. A typical subword tokenizer (such as the GPT-2 tokenizer) might produce something like:
+
+| Text fragment | Token ID (approximate) |
+|---|---|
+| `Hello` | 15496 |
+| `,` | 11 |
+| ` world` | 995 |
+| `!` | 0 |
+| ` How` | 1374 |
+| ` are` | 389 |
+| ` you` | 345 |
+| `?` | 30 |
+
+Notice that the space before `world` is included as part of the token — most modern tokenizers treat leading whitespace as part of the following word. Punctuation usually gets its own token. The exact splits depend on what was frequent in the training corpus.
+
+The model receives the integer sequence `[15496, 11, 995, 0, 1374, 389, 345, 30]` and never sees the original characters.
+
+---
+
+To understand how modern tokenizers build their vocabulary from raw text, read the next page on Byte Pair Encoding — the algorithm that powers tokenization in most production LLMs.
+
+<Card title="Byte Pair Encoding: How LLMs Tokenize Text" icon="brackets-curly" href="/tokenization/byte-pair-encoding">
+  Learn how BPE builds a subword vocabulary by iteratively merging the most frequent character pairs in a training corpus.
+</Card>

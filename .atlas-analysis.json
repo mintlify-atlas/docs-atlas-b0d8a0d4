@@ -1,0 +1,85 @@
+{
+  "projectType": "ai-ml",
+  "projectName": "LLM Internals",
+  "projectDescription": "A step-by-step educational resource for learning LLM internals — from tokenization and attention mechanisms to transformer architecture and inference optimization.",
+  "theme": "luma",
+  "primaryColor": "#4c44e4",
+  "lightColor": "#a49cd8",
+  "darkColor": "#eeeef5",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Learn",
+        "groups": [
+          {
+            "group": "Introduction",
+            "pages": [
+              "introduction",
+              "what-is-llm"
+            ]
+          },
+          {
+            "group": "Tokenization",
+            "pages": [
+              "tokenization/overview",
+              "tokenization/byte-pair-encoding"
+            ]
+          },
+          {
+            "group": "Attention Mechanism",
+            "pages": [
+              "attention/math-behind-attention-qkv",
+              "attention/scaling-factor",
+              "attention/causal-masking"
+            ]
+          },
+          {
+            "group": "Transformer Architecture",
+            "pages": [
+              "transformer/architecture",
+              "transformer/feed-forward-networks",
+              "transformer/backpropagation"
+            ]
+          },
+          {
+            "group": "Inference Optimization",
+            "pages": [
+              "inference/kv-cache",
+              "inference/paged-attention",
+              "inference/flash-attention",
+              "inference/mixture-of-experts"
+            ]
+          },
+          {
+            "group": "AI Engineering",
+            "pages": [
+              "ai-engineering/harness-engineering"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Step-by-step explanations of LLM tokenization including Byte Pair Encoding (BPE)",
+    "Deep dive into the attention mechanism with math: Q, K, V matrices, scaling, and causal masking",
+    "Complete Transformer architecture breakdown — encoder, decoder, multi-head attention, FFN",
+    "Inference optimization techniques: KV Cache, Paged Attention, Flash Attention",
+    "Advanced topics: Mixture of Experts (MoE) and Harness Engineering in AI",
+    "Accompanying video tutorials and blog posts for each topic"
+  ],
+  "publicApiSurface": [
+    "Tokenization overview",
+    "Byte Pair Encoding (BPE) algorithm",
+    "Attention formula: Softmax(QK^T / sqrt(dk)) * V",
+    "Causal masking implementation",
+    "Backpropagation math and chain rule",
+    "Transformer architecture (encoder-decoder variants)",
+    "Feed-Forward Networks in Transformers",
+    "KV Cache mechanism",
+    "Paged Attention memory management",
+    "Flash Attention (v1, v2, v3)",
+    "Mixture of Experts (MoE) routing",
+    "Harness Engineering for AI Agents and Evaluation"
+  ]
+}

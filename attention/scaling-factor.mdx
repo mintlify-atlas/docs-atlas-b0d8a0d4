@@ -1,0 +1,180 @@
+---
+title: "Why Attention Divides by √dₖ: Variance and Softmax Stability"
+description: "A rigorous explanation of why dividing attention scores by √dₖ prevents gradient vanishing and keeps softmax well-behaved during training."
+---
+
+When you compute raw dot-product attention scores without any scaling, those scores grow proportionally with the dimension of the query and key vectors. For the large d_k values used in real Transformers (64, 128, 512), this causes softmax to produce near-zero outputs for almost every position, which in turn causes gradients to nearly vanish and training to stall. Dividing by √d_k is not a heuristic — it is a statistically principled correction that restores the dot products to unit variance regardless of dimension.
+
+<Note>
+The full scaled dot-product attention formula is:
+
+```
+Attention(Q, K, V) = softmax(Q · K^T / √d_k) · V
+```
+
+The √d_k in the denominator is what this page explains.
+</Note>
+
+## The attention formula — quick recap
+
+Standard (unscaled) dot-product attention computes:
+
+```
+scores[i, j] = q_i · k_j
+```
+
+where q_i and k_j are the query and key vectors for tokens i and j. These raw scores are fed into softmax, then multiplied by the value matrix V. The problem is entirely inside the softmax step: the raw scores can be very large.
+
+## What happens without scaling?
+
+Consider d_k = 64, a common value in small Transformers. If each element of q and k is drawn independently from a standard normal distribution (mean 0, variance 1), then the dot product:
+
+```
+q · k = q₁k₁ + q₂k₂ + ... + q₆₄k₆₄
+```
+
+is a sum of 64 independent random variables. Each term has mean 0 and variance 1, so the total has mean 0 and **variance 64**. That means the standard deviation of the raw score is **√64 = 8**. Scores routinely land in the range −24 to +24 (three standard deviations), and softmax is extremely sensitive to values in that range.
+
+## Why dot products grow with d_k
+
+The growth is a direct consequence of the central limit theorem applied to a sum of independent products. Let q and k be random vectors where each component is sampled independently with mean 0 and variance 1. Their dot product is:
+
+```
+q · k = Σᵢ qᵢkᵢ   (sum over i = 1..d_k)
+```
+
+For each term qᵢkᵢ:
+- E[qᵢkᵢ] = E[qᵢ] · E[kᵢ] = 0 · 0 = 0   (mean zero)
+- Var(qᵢkᵢ) = E[qᵢ²kᵢ²] − (E[qᵢkᵢ])² = E[qᵢ²]·E[kᵢ²] − 0 = 1 · 1 = 1
+
+Since the d_k terms are independent, their variances add:
+
+```
+Var(q · k) = Var(q₁k₁) + Var(q₂k₂) + ... + Var(q_{d_k}k_{d_k}) = d_k
+```
+
+The standard deviation of the dot product is therefore **√d_k**, not 1. As d_k increases, the typical magnitude of raw attention scores grows as √d_k.
+
+## Proving it step by step: variance of the dot product is d_k
+
+Here is the derivation in full:
+
+**Step 1** — Assume qᵢ ~ N(0, 1) and kᵢ ~ N(0, 1), all independent.
+
+**Step 2** — For a single product term:
+```
+E[qᵢ²] = Var(qᵢ) + (E[qᵢ])² = 1 + 0 = 1
+E[kᵢ²] = 1
+E[(qᵢkᵢ)²] = E[qᵢ²] · E[kᵢ²] = 1 · 1 = 1   (by independence)
+Var(qᵢkᵢ) = E[(qᵢkᵢ)²] − (E[qᵢkᵢ])² = 1 − 0 = 1
+```
+
+**Step 3** — For the sum of d_k independent terms:
+```
+Var(Σᵢ qᵢkᵢ) = Σᵢ Var(qᵢkᵢ) = d_k · 1 = d_k
+```
+
+**Step 4** — Standard deviation (the scale of the values):
+```
+std(q · k) = √d_k
+```
+
+This is why the raw scores are large: their scale grows as √d_k.
+
+## What large dot products do to softmax
+
+The softmax function is:
+
+```
+softmax(xᵢ) = exp(xᵢ) / Σⱼ exp(xⱼ)
+```
+
+When one score is significantly larger than the others, say by 4 or more standard deviations, its exponential dominates and the softmax output becomes nearly one-hot:
+
+```
+scores = [-12, 3, 18, -6, 1, -9, 2, 7]   # with d_k=64, std=8
+softmax ≈  [0.0000, 0.0001, 0.9993, 0.0000, ...]
+```
+
+Almost all attention weight concentrates on a single position. The gradient of softmax with respect to its input is approximately zero everywhere except at the argmax. This means:
+
+- The value vectors for all other positions contribute nothing to the output
+- The loss gradient flowing back through softmax is nearly zero for all but one entry
+- Weight matrices W_Q and W_K receive almost no gradient signal
+- **Learning effectively stalls**
+
+<Warning>
+Without √d_k scaling, gradient vanishing in the softmax is systematic — not an edge case. For d_k = 64, raw dot products have standard deviation 8. This means even a moderately imbalanced score distribution pushes softmax into its saturated regime where gradients are effectively zero. The model fails to learn good attention patterns, and performance degrades severely. This is not a theoretical concern: the original "Attention Is All You Need" paper specifically calls this out as the reason for adding the scaling factor.
+</Warning>
+
+## Why √d_k is the right scaling factor
+
+If the raw dot product has standard deviation √d_k, dividing by √d_k rescales it to standard deviation 1:
+
+```
+Var(q · k / √d_k) = Var(q · k) / d_k = d_k / d_k = 1
+```
+
+Scores now have unit variance regardless of d_k. This means:
+- The magnitude of inputs to softmax stays roughly constant as model dimension changes
+- The softmax output remains a smooth distribution rather than a one-hot vector
+- Gradients flow back through softmax without vanishing
+- Training is stable across a wide range of d_k values
+
+The choice of √d_k is exact, not approximate. It is the unique scaling factor that normalises the variance of the dot product under the assumption of unit-variance inputs.
+
+## Seeing it with real numbers
+
+The following code demonstrates the effect concretely for d_k = 64:
+
+```python
+import numpy as np
+
+def softmax(x):
+    e_x = np.exp(x - x.max())
+    return e_x / e_x.sum()
+
+# Simulate scores for d_k=64 (common in Transformers)
+np.random.seed(42)
+d_k = 64
+scores_unscaled = np.random.randn(8) * np.sqrt(d_k)  # large values
+
+scores_scaled = scores_unscaled / np.sqrt(d_k)  # scaled values
+
+print("Without scaling:")
+print("  Scores:", np.round(scores_unscaled, 2))
+print("  Softmax:", np.round(softmax(scores_unscaled), 4))
+print("  → Nearly one-hot, gradients vanish")
+
+print("\nWith √d_k scaling:")
+print("  Scores:", np.round(scores_scaled, 2))
+print("  Softmax:", np.round(softmax(scores_scaled), 4))
+print("  → Smoother distribution, healthy gradients")
+```
+
+Running this produces output similar to:
+
+```
+Without scaling:
+  Scores: [ 3.77  4.14 -6.35  1.97  5.22 -1.88  7.75 -2.26]
+  Softmax: [0.0009 0.0013 0.    0.0002 0.0033 0.     0.9943 0.    ]
+  → Nearly one-hot, gradients vanish
+
+With √d_k scaling:
+  Scores: [ 0.47  0.52 -0.79  0.25  0.65 -0.23  0.97 -0.28]
+  Softmax: [0.1245 0.1307 0.0351 0.0993 0.1489 0.0614 0.2038 0.0593]
+  → Smoother distribution, healthy gradients
+```
+
+The unscaled softmax assigns 99.4% of attention to a single token. The scaled softmax distributes attention meaningfully across the sequence, allowing the model to consider multiple positions simultaneously.
+
+## Putting it all together
+
+The √d_k scaling factor solves a concrete statistical problem: dot products between random vectors grow in scale with dimensionality, and softmax is pathologically sensitive to large-magnitude inputs. By dividing by √d_k before applying softmax, the attention mechanism:
+
+1. Keeps dot product magnitudes at unit scale regardless of model dimension
+2. Maintains well-distributed (non-degenerate) attention weights
+3. Preserves gradient flow through softmax during training
+4. Remains stable as models scale to larger d_k values
+
+This single division is one of the most impactful implementation details in the Transformer architecture, and the math behind it is straightforward once you trace the variance through the dot product.

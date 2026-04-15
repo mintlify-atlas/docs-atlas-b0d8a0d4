@@ -1,0 +1,198 @@
+---
+title: "Mixture of Experts: More Capacity, Same Compute Cost"
+description: "Learn how Mixture of Experts lets LLMs have far more parameters than a dense model while keeping per-token compute constant through sparse activation."
+---
+
+Dense Transformer models activate every parameter for every token, which means doubling model capacity requires doubling compute. Mixture of Experts (MoE) breaks this constraint: instead of one feed-forward network per Transformer layer, MoE layers contain many specialized sub-networks called experts, and only a small subset of them are activated for any given token. The result is a model that can hold far more knowledge than a dense model of the same compute cost — a trade-off that powers some of today's most capable LLMs.
+
+## Why Mixture of Experts was needed
+
+A dense model processes every token through every parameter. This is straightforward but inefficient: a physics question and a haiku do not need the same knowledge, yet both activate the same weights. As models scale, the cost of this uniformity grows directly with parameter count.
+
+MoE offers a different trade-off: **increase total parameters (capacity) without proportionally increasing compute per token**. More parameters means the model can store more knowledge, handle more languages, and generalize better — but by routing each token only to the experts it needs, the per-token compute stays nearly constant.
+
+This decoupling of model capacity from compute cost is the core motivation for MoE.
+
+## What an "expert" is
+
+In a Transformer MoE layer, each expert is simply a **Feed-Forward Network (FFN)**. A standard Transformer layer has one FFN; an MoE layer has N FFNs — the experts. Everything else in the Transformer (self-attention, layer normalization, residual connections) is shared across all experts and unchanged.
+
+At inference, a routing mechanism selects K of the N experts for each token (where K is much smaller than N, typically K = 2). The token is processed by those K experts, and their outputs are combined via a weighted sum. All other experts receive no input and perform no computation for that token.
+
+The key parameters:
+- **N**: total number of experts per MoE layer (commonly 8, 64, or more)
+- **K**: experts activated per token (commonly 2)
+- **Sparsity**: only K/N experts are active per token
+
+## The router and how it picks experts
+
+The router is a small linear layer that maps each token's embedding to a score for every expert, then selects the top-K experts by score.
+
+Mathematically, for a token embedding `x`:
+
+```
+router_logits = x × W_router        # shape: (num_experts,)
+top_k_indices = argsort(router_logits)[-K:]
+gates = softmax(router_logits[top_k_indices])
+output = Σᵢ gates[i] × expert_i(x)
+```
+
+The gates are normalized softmax probabilities over only the selected top-K experts. This ensures the weighted sum of expert outputs is properly scaled regardless of which experts are chosen.
+
+## Where MoE sits inside a Transformer
+
+MoE replaces the FFN sublayer in some or all Transformer layers. The attention sublayer is not affected. A typical MoE Transformer has:
+
+1. Multi-head self-attention (dense, shared)
+2. **MoE layer** (replaces the single FFN with N experts + router)
+3. Layer normalization and residual connections (dense, shared)
+
+In some architectures, only every other layer is an MoE layer; the remainder use standard dense FFNs. This controls the ratio of capacity increase to memory overhead.
+
+## How a token is routed and processed
+
+<Steps>
+  <Step title="Compute router logits">
+    The token embedding passes through the router's linear layer, producing one score per expert. These scores measure how relevant each expert is for this token.
+  </Step>
+  <Step title="Select top-K experts">
+    The K experts with the highest scores are selected. All others are ignored for this token — they receive no input and produce no output.
+  </Step>
+  <Step title="Compute gating weights">
+    Softmax is applied over the top-K scores to produce normalized weights that sum to 1. These weights control how much each selected expert contributes to the final output.
+  </Step>
+  <Step title="Process through selected experts">
+    The token is sent to each of the K selected experts in parallel. Each expert applies its own FFN transformation independently.
+  </Step>
+  <Step title="Combine expert outputs">
+    The outputs of the K experts are combined as a weighted sum using the gating weights. This single combined vector is the MoE layer's output for this token, passed to the next layer.
+  </Step>
+</Steps>
+
+## Implementation
+
+```python
+import numpy as np
+
+def softmax(x):
+    e_x = np.exp(x - x.max())
+    return e_x / e_x.sum()
+
+class MixtureOfExperts:
+    """
+    Simplified Mixture of Experts layer.
+    Replaces the FFN in a Transformer block.
+    """
+    
+    def __init__(self, d_model, d_ff, num_experts=8, top_k=2):
+        self.num_experts = num_experts
+        self.top_k = top_k
+        
+        # Router: maps d_model → num_experts scores
+        self.W_router = np.random.randn(d_model, num_experts) * 0.02
+        
+        # Expert FFNs (each is a W1, W2 pair)
+        self.experts = [
+            (np.random.randn(d_model, d_ff) * 0.02,
+             np.random.randn(d_ff, d_model) * 0.02)
+            for _ in range(num_experts)
+        ]
+    
+    def forward(self, x):
+        """
+        x: (seq_len, d_model)
+        Returns: (seq_len, d_model)
+        """
+        seq_len, d_model = x.shape
+        output = np.zeros_like(x)
+        
+        # Route each token
+        router_logits = x @ self.W_router  # (seq_len, num_experts)
+        
+        for token_idx in range(seq_len):
+            logits = router_logits[token_idx]  # (num_experts,)
+            
+            # Select top-k experts
+            top_k_indices = np.argsort(logits)[-self.top_k:]
+            top_k_logits = logits[top_k_indices]
+            top_k_gates = softmax(top_k_logits)  # normalize among selected
+            
+            # Compute weighted sum of selected expert outputs
+            token_output = np.zeros(d_model)
+            for i, expert_idx in enumerate(top_k_indices):
+                W1, W2 = self.experts[expert_idx]
+                # FFN: ReLU(x @ W1) @ W2
+                hidden = np.maximum(0, x[token_idx] @ W1)
+                expert_out = hidden @ W2
+                token_output += top_k_gates[i] * expert_out
+            
+            output[token_idx] = token_output
+        
+        return output
+```
+
+## Sparse activation and why it saves compute
+
+The compute savings from MoE are a direct consequence of sparsity. With N = 8 experts and top-K = 2 routing, only 2/8 = 25% of expert parameters are activated per token. The model's total parameter count is 8× larger than a single-expert equivalent — but the compute per token is approximately the same as the single-expert model.
+
+A concrete example: **Mixtral 8×7B** has 8 experts per MoE layer, each with ~7B parameters, for a total of ~46.7B parameters. But with top-2 routing, each token only flows through 2 experts. The effective compute per token is close to a ~12B dense model, while the total knowledge capacity is much larger.
+
+This is the MoE promise: more capacity at roughly the same inference cost.
+
+## Load balancing across experts
+
+Left unconstrained, the router tends to collapse — it learns to send most tokens to a small set of preferred experts, leaving others idle. This wastes capacity and causes hotspots in distributed inference (the busy experts become bottlenecks).
+
+Load balancing is enforced through an **auxiliary loss** added during training. A common formulation:
+
+```python
+# Load balancing loss (simplified)
+# Encourages uniform distribution of tokens across experts
+def load_balance_loss(router_probs, top_k_mask, alpha=0.01):
+    """
+    router_probs: (seq_len, num_experts) — softmax over all experts
+    top_k_mask: (seq_len, num_experts) — 1 if expert was selected, else 0
+    """
+    # Fraction of tokens dispatched to each expert
+    tokens_per_expert = top_k_mask.mean(axis=0)  # (num_experts,)
+    
+    # Mean router probability for each expert
+    mean_router_prob = router_probs.mean(axis=0)  # (num_experts,)
+    
+    # Loss: high when some experts get many tokens AND high probability
+    loss = alpha * (tokens_per_expert * mean_router_prob).sum()
+    return loss
+```
+
+This auxiliary loss penalizes configurations where token fractions and router probabilities are both concentrated on the same experts, pushing the router toward more uniform routing over the course of training.
+
+## Advantages and challenges of MoE
+
+**Advantages:**
+- More model capacity at the same per-token inference cost
+- Specialization: different experts naturally learn different domains and token types
+- Scales well to very large total parameter counts that would be impractical in dense form
+
+**Challenges:**
+- **Memory:** All expert weights must reside in memory simultaneously, even though most are inactive per token. A 46.7B-parameter MoE model requires loading all 46.7B parameters into GPU memory — more than a 12B dense model.
+- **Communication overhead:** In distributed inference, different experts may live on different devices. Routing tokens across devices (expert parallelism) introduces network communication that is absent in dense models.
+- **Training instability:** Router collapse, load imbalance, and sensitivity to the auxiliary loss weight require careful tuning.
+
+<Tip>
+  MoE gives more knowledge capacity for the same compute, but it complicates deployment. All expert weights must be loaded into GPU (or CPU) memory, so a large MoE model may require more GPUs than a dense model with equivalent per-token compute. For single-GPU inference, MoE models often need quantization or CPU offloading to fit. This trade-off is worth it at scale — but matters significantly for deployment planning.
+</Tip>
+
+## Why MoE powers many modern LLMs
+
+<Note>
+  Several of the most capable LLMs use MoE architectures:
+
+  - **Mixtral 8×7B and 8×22B** (Mistral AI) — open-weight MoE models with top-2 routing out of 8 experts
+  - **Grok-1** (xAI) — 314B total parameters, ~86B active per token, released as open weights
+  - **DeepSeek-V2 and V3** (DeepSeek) — use a fine-grained MoE design with many more, smaller experts
+  - **GPT-4** — widely reported to use a MoE architecture, though OpenAI has not confirmed details
+
+  The pattern is clear: at the frontier of model capability, MoE has become the default architecture for organizations that need to maximize model quality within practical compute budgets.
+</Note>
+
+The success of MoE reflects a broader principle in deep learning: **architectural choices that decouple model capacity from computational cost tend to win at scale**. MoE is not the only such technique — quantization, sparse attention, and KV Cache management all operate on similar logic — but it is among the most impactful for increasing what a model can know without proportionally increasing what it costs to run.

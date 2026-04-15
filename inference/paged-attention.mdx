@@ -1,0 +1,122 @@
+---
+title: "Paged Attention: GPU Memory Management for LLM Serving"
+description: "Learn how Paged Attention borrows OS virtual memory techniques to maximize GPU utilization and serve far more concurrent LLM requests."
+---
+
+KV Cache makes LLM generation fast, but it creates a severe memory management problem when serving multiple users simultaneously. Each request must hold its KV Cache in GPU memory for its entire lifetime, and the standard approach of pre-allocating the maximum possible sequence length wastes the majority of that memory. Paged Attention — introduced by the vLLM project — solves this by managing KV Cache memory the same way an operating system manages RAM: through paging.
+
+<Note>
+  Paged Attention was introduced in **"Efficient Memory Management for Large Language Model Serving with PagedAttention"** by Kwon et al. (2023) and is the core innovation behind [vLLM](https://github.com/vllm-project/vllm), one of the most widely used LLM serving frameworks.
+</Note>
+
+## Quick recap: KV Cache
+
+During autoregressive generation, each Transformer attention layer computes Key (K) and Value (V) matrices for every token in the sequence. KV Cache stores these matrices so they do not need to be recomputed on each new decoding step. The cache grows by one entry per layer per generated token and must remain in GPU memory until the request completes.
+
+For a model like LLaMA-2 70B, the KV Cache for a single 4,096-token request consumes roughly 4 GB of GPU memory. The bottleneck is not compute — it is memory capacity and how efficiently that memory is used.
+
+## The problem: memory waste in KV Cache
+
+When an LLM server receives a request, it does not know in advance how many tokens the model will generate. The standard approach is to pre-allocate a contiguous block of GPU memory sized for the **maximum possible sequence length** (e.g., 4,096 tokens), then fill it in as generation proceeds.
+
+This causes two serious problems:
+
+**Internal fragmentation.** A request that generates only 200 tokens still holds a 4,096-token block for its entire lifetime. The unused ~3,896 tokens of memory are wasted — the allocator cannot give them to anyone else.
+
+**External fragmentation.** Even when total free memory is sufficient to serve a new request, it may not be available as a single contiguous block. The GPU memory becomes a patchwork of used and free regions that cannot be consolidated.
+
+The result: a 40 GB GPU serving a model that theoretically fits many requests ends up handling only 5–10 at a time, with GPU memory utilization hovering around 20–40%.
+
+## What is Paged Attention?
+
+Paged Attention applies the same principle as virtual memory paging in operating systems. Instead of one large contiguous allocation per request, KV Cache memory is divided into small, fixed-size **pages** (also called blocks), each holding the K and V vectors for a fixed number of tokens (e.g., 16 tokens per page).
+
+A **page table** maps each request's logical KV Cache — its ordered sequence of token slots — to physical pages scattered anywhere in GPU memory. Requests do not need contiguous memory. Pages are allocated on demand as new tokens are generated and returned to a free pool the moment a request finishes.
+
+This means:
+- No memory is reserved ahead of time for tokens that may never be generated
+- Completed requests immediately return all their pages for reuse
+- The allocator packs requests tightly regardless of their individual sequence lengths
+
+## How Paged Attention works
+
+```python
+class PagedAttentionManager:
+    """
+    Simplified illustration of Paged Attention memory management.
+    
+    Key idea: KV Cache is stored in fixed-size pages (blocks).
+    Each request gets a logical sequence of pages, not contiguous memory.
+    """
+    
+    PAGE_SIZE = 16  # tokens per page
+    
+    def __init__(self, total_pages: int, d_model: int):
+        self.total_pages = total_pages
+        self.d_model = d_model
+        self.free_pages = list(range(total_pages))   # available page indices
+        self.page_table = {}   # request_id -> list of page indices
+        # Physical KV store: shape (total_pages, PAGE_SIZE, 2, d_model)
+        import numpy as np
+        self.kv_store = np.zeros((total_pages, self.PAGE_SIZE, 2, d_model))
+    
+    def allocate_page(self, request_id: str) -> int:
+        """Allocate a new physical page for a request."""
+        if not self.free_pages:
+            raise MemoryError("No free KV Cache pages available")
+        
+        page_idx = self.free_pages.pop(0)
+        if request_id not in self.page_table:
+            self.page_table[request_id] = []
+        self.page_table[request_id].append(page_idx)
+        return page_idx
+    
+    def free_request(self, request_id: str):
+        """Return all pages used by a completed request to the free pool."""
+        if request_id in self.page_table:
+            self.free_pages.extend(self.page_table.pop(request_id))
+    
+    def memory_utilization(self) -> float:
+        """Fraction of pages currently in use."""
+        used = self.total_pages - len(self.free_pages)
+        return used / self.total_pages
+```
+
+During attention computation, the attention kernel uses each request's page table to gather the correct physical pages in logical order. From the model's perspective, the KV Cache is a contiguous sequence — the paging is transparent to the attention math.
+
+## Why Paged Attention is so effective
+
+Because pages are small (e.g., 16 tokens) and allocated on demand, the only wasted memory at any moment is at most one partially-filled page per active request — a negligible amount. Utilization climbs from 20–40% with naive allocation to near 100%.
+
+The practical impact is substantial:
+
+- **2–4× more concurrent requests** on the same GPU hardware
+- **Higher throughput** because the GPU stays busier
+- **Predictable memory behavior** — the server knows exactly how many requests it can accept before memory is exhausted, enabling smarter scheduling
+
+## Memory sharing across requests
+
+Paged Attention enables a powerful bonus: sharing KV Cache pages between requests that share a common prefix.
+
+Many production workloads send the same system prompt to every request. Without sharing, each request independently computes and stores K and V for that identical prefix — duplicating work and memory proportional to the prefix length times the number of concurrent requests.
+
+<Tip>
+  **Prefix caching** (also called prompt caching) allows requests that share the same prefix — such as a system prompt — to map their first N pages to the **same physical pages** in the KV Cache. These shared pages are read-only. When two requests diverge (because they generate different outputs), copy-on-write semantics ensure that each gets its own private pages from that point forward. This can eliminate a large fraction of prefill computation and memory for high-traffic deployments.
+</Tip>
+
+With prefix caching, a server handling 100 concurrent requests that all share a 500-token system prompt stores the KV Cache for that prefix **once** rather than 100 times. The memory savings compound: the freed pages can be allocated to additional requests, further improving throughput.
+
+## The impact in practice
+
+The numbers from the vLLM paper and subsequent benchmarks are striking:
+
+| Allocation strategy | GPU memory utilization | Concurrent requests (40 GB GPU) |
+|---|---|---|
+| Naive contiguous | ~20–40% | 5–10 |
+| Paged Attention | ~95–100% | 20–40+ |
+
+Systems using Paged Attention also benefit from better request scheduling. Because pages are returned immediately when requests finish — rather than holding large contiguous blocks until all in-flight requests complete — the server can start new requests sooner, reducing queuing latency under load.
+
+---
+
+With KV Cache memory efficiently managed, the next bottleneck is the attention computation itself. See [Flash Attention](/inference/flash-attention) to understand how modern LLMs minimize the cost of computing attention scores.

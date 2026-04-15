@@ -1,0 +1,48 @@
+---
+title: "What Is an LLM? Understanding the Core AI Concepts"
+description: "A technical overview of Large Language Models and the ecosystem around them — covering RAG, MCP, Agents, fine-tuning, and quantization."
+---
+
+Before you can understand LLM internals, it helps to have a clear picture of what a large language model actually is and how the surrounding ecosystem fits together. This page covers the six concepts that define modern AI engineering: the LLM itself, retrieval-augmented generation, the model context protocol, agents, fine-tuning, and quantization. Each one builds on the others, and together they form the foundation for everything that follows in this resource.
+
+<AccordionGroup>
+  <Accordion title="LLM — Large Language Model">
+    A large language model is a neural network trained on massive amounts of text data to predict the next token in a sequence. During training, the model learns statistical patterns across billions of parameters — weights that encode relationships between concepts, syntax, and meaning. At inference time, those weights are fixed, and the model generates text autoregressively: one token at a time, each prediction conditioned on everything that came before.
+
+    The scale of both the data and the parameter count is what makes these models "large." Models like GPT-4, Claude, and Llama are trained on trillions of tokens and have tens to hundreds of billions of parameters. This scale is what gives them broad capability across tasks they were never explicitly trained to perform.
+  </Accordion>
+
+  <Accordion title="RAG — Retrieval-Augmented Generation">
+    Retrieval-Augmented Generation is a pattern for extending an LLM with access to external knowledge at inference time. Instead of relying solely on what the model learned during training, a RAG system retrieves relevant documents or data from an external store — typically a vector database — and includes that content in the prompt before asking the model to generate a response.
+
+    RAG addresses two fundamental limitations of base LLMs: knowledge cutoffs (the model does not know about events after its training data ends) and hallucination (the model may confabulate facts it cannot actually recall). By grounding responses in retrieved documents, RAG makes LLMs more accurate and easier to keep up to date without retraining.
+  </Accordion>
+
+  <Accordion title="MCP — Model Context Protocol">
+    The Model Context Protocol is a standardized interface that defines how LLMs communicate with external tools, data sources, and services. Rather than every application building its own bespoke integration between a model and, say, a database or a file system, MCP provides a common protocol that both model providers and tool developers can implement once and reuse across many integrations.
+
+    MCP matters because modern AI applications are rarely just a model generating text in isolation. They need to read files, call APIs, query databases, and interact with external systems. A shared protocol reduces integration overhead and makes it easier to compose tools from different vendors into a single coherent system.
+  </Accordion>
+
+  <Accordion title="Agent">
+    An AI agent is a system that uses an LLM as its reasoning engine to plan and execute multi-step tasks autonomously. Where a basic LLM call produces a single response, an agent can decide which tools to call, observe the results, and use those results to inform the next step — looping until the task is complete or it determines it cannot proceed.
+
+    Agents are powerful because they move the LLM from a passive responder to an active participant that can take actions in the world. They also introduce new engineering challenges: the agent needs a reliable way to call tools, manage state across turns, handle errors, and stay on track without going off-course. This is where harness engineering becomes important.
+  </Accordion>
+
+  <Accordion title="Fine-tuning">
+    Fine-tuning is the process of continuing to train a pre-trained LLM on a smaller, task-specific dataset to adapt its behavior for a particular use case. The base model has already learned broad language understanding from pre-training; fine-tuning updates the model weights further so the model performs better on a specific domain, format, or task.
+
+    Common fine-tuning approaches include full fine-tuning (updating all parameters), parameter-efficient methods like LoRA that update only a small fraction of weights, and instruction tuning that teaches the model to follow structured prompts. Fine-tuning is typically used when prompt engineering alone is not sufficient to get the behavior you need, and when you have enough labeled data to make it worthwhile.
+  </Accordion>
+
+  <Accordion title="Quantization">
+    Quantization reduces the numerical precision of a model's weights — for example, from 32-bit floating point to 8-bit integers — to make the model smaller and faster to run. Because memory bandwidth is often the bottleneck during inference, a model that fits in fewer bytes can be loaded and executed significantly faster, and can run on hardware with less memory.
+
+    The trade-off is that reducing precision can degrade model quality. Modern quantization techniques such as GPTQ and AWQ are designed to minimize this quality loss by carefully choosing which weights to quantize and how, often achieving 4-bit or even lower precision with only a small drop in benchmark performance. Quantization is one of the most practical tools for deploying large models efficiently in production.
+  </Accordion>
+</AccordionGroup>
+
+<Note>
+  These six concepts are covered in depth in the video [AI Engineering Explained: LLM, RAG, MCP, Agent, Fine-Tuning, Quantization](https://www.youtube.com/watch?v=lnfWvX66FUk) — a good starting point before working through the technical internals in the rest of this resource.
+</Note>

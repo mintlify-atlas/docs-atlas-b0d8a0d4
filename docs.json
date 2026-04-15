@@ -1,122 +1,76 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "LLM Internals",
+  "theme": "luma",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#4c44e4",
+    "light": "#a49cd8",
+    "dark": "#eeeef5"
   },
-  "favicon": "/favicon.svg",
-  "navigation": {
-    "tabs": [
-      {
-        "tab": "Guides",
-        "groups": [
-          {
-            "group": "Getting started",
-            "pages": [
-              "index",
-              "quickstart",
-              "development"
-            ]
-          },
-          {
-            "group": "Customization",
-            "pages": [
-              "essentials/settings",
-              "essentials/navigation"
-            ]
-          },
-          {
-            "group": "Writing content",
-            "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
-            ]
-          },
-          {
-            "group": "AI tools",
-            "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
-            ]
-          }
-        ]
-      },
-      {
-        "tab": "API reference",
-        "groups": [
-          {
-            "group": "API documentation",
-            "pages": [
-              "api-reference/introduction"
-            ]
-          },
-          {
-            "group": "Endpoint examples",
-            "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
-            ]
-          }
-        ]
-      }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
+  "favicon": "https://media.brand.dev/f77bb87e-830d-4f97-bfba-67e5cd8cb698.jpg",
   "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
     "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
+      "type": "github",
+      "href": "https://github.com/amitshekhariitbhu/llm-internals"
     }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
   },
   "footer": {
     "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
+      "github": "https://github.com/amitshekhariitbhu/llm-internals"
     }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Learn",
+        "groups": [
+          {
+            "group": "Introduction",
+            "pages": [
+              "introduction",
+              "what-is-llm"
+            ]
+          },
+          {
+            "group": "Tokenization",
+            "pages": [
+              "tokenization/overview",
+              "tokenization/byte-pair-encoding"
+            ]
+          },
+          {
+            "group": "Attention Mechanism",
+            "pages": [
+              "attention/math-behind-attention-qkv",
+              "attention/scaling-factor",
+              "attention/causal-masking"
+            ]
+          },
+          {
+            "group": "Transformer Architecture",
+            "pages": [
+              "transformer/architecture",
+              "transformer/feed-forward-networks",
+              "transformer/backpropagation"
+            ]
+          },
+          {
+            "group": "Inference Optimization",
+            "pages": [
+              "inference/kv-cache",
+              "inference/paged-attention",
+              "inference/flash-attention",
+              "inference/mixture-of-experts"
+            ]
+          },
+          {
+            "group": "AI Engineering",
+            "pages": [
+              "ai-engineering/harness-engineering"
+            ]
+          }
+        ]
+      }
+    ]
   }
 }

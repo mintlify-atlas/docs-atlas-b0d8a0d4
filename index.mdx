@@ -1,97 +1,53 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "LLM Internals: Learn How Large Language Models Work"
+description: "A step-by-step guide to LLM internals — from tokenization and attention mechanisms to transformer architecture and inference optimization."
 ---
 
-## Setting up
+LLM Internals is a curated learning resource by [Amit Shekhar](https://x.com/amitiitbhu), Founder of Outcome School. It walks you through every core concept powering modern Large Language Models — explained step by step with math, examples, and code.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="What is an LLM?" icon="brain" href="/what-is-llm">
+    Understand LLMs, RAG, MCP, Agents, fine-tuning, and quantization before diving into internals.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Tokenization" icon="scissors" href="/tokenization/overview">
+    Learn how raw text is broken into tokens and why tokenization is the first step in every LLM pipeline.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Attention Mechanism" icon="eye" href="/attention/math-behind-attention-qkv">
+    Understand the math behind Query, Key, and Value matrices — the heart of the Transformer.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Transformer Architecture" icon="network-wired" href="/transformer/architecture">
+    Decode the full Transformer architecture piece by piece — from embeddings to the final output.
   </Card>
-</Columns>
+  <Card title="Inference Optimization" icon="bolt" href="/inference/kv-cache">
+    Explore KV Cache, Paged Attention, Flash Attention, and Mixture of Experts for faster inference.
+  </Card>
+  <Card title="AI Engineering" icon="wrench" href="/ai-engineering/harness-engineering">
+    Learn about Harness Engineering — the scaffolding that powers AI Agents and evaluation systems.
+  </Card>
+</CardGroup>
 
-## Create beautiful pages
+## Learning path
 
-Everything you need to create world-class documentation.
+Work through the topics in order for the best understanding, or jump directly to the concept you want to explore.
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+<Steps>
+  <Step title="Start with LLM fundamentals">
+    Get a high-level overview of what LLMs are, and the key concepts around them — RAG, MCP, Agents, fine-tuning, and quantization.
+  </Step>
+  <Step title="Understand tokenization">
+    Learn how text is converted to tokens, and how the Byte Pair Encoding (BPE) algorithm builds a vocabulary from raw text.
+  </Step>
+  <Step title="Master the attention mechanism">
+    Work through the math behind Q, K, V attention — including the scaling factor and causal masking used in autoregressive models.
+  </Step>
+  <Step title="Decode the Transformer architecture">
+    Understand how tokenization, embeddings, attention, feed-forward networks, and residual connections combine into a full Transformer.
+  </Step>
+  <Step title="Explore inference optimization">
+    Study the techniques that make LLM inference fast and memory-efficient: KV Cache, Paged Attention, Flash Attention, and MoE.
+  </Step>
+</Steps>
 
-## Need inspiration?
-
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+<Note>
+  This resource is actively maintained and grows over time. New topics covering LLM internals, training, and evaluation are added regularly.
+</Note>

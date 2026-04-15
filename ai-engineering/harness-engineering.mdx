@@ -1,0 +1,270 @@
+---
+title: "Harness Engineering: Infrastructure for AI Agents and Evaluation"
+description: "Learn how to build the infrastructure that wraps LLMs and AI Agents to control inputs, observe behavior, and run systematic evaluations."
+---
+
+Harness engineering is the discipline of building the scaffolding that surrounds an LLM or AI Agent in production. Where traditional software can be tested with deterministic unit tests, AI systems are non-deterministic, interact with external tools and APIs, and produce outputs that require nuanced scoring rather than binary pass/fail checks. A harness gives you control over what goes into the model, visibility into every step of execution, and the infrastructure to evaluate quality systematically — making it an essential layer between your raw model and a reliable production system.
+
+## What is a harness?
+
+In traditional software testing, a "test harness" is the scaffolding that runs tests and collects results. In AI, the concept is broader: a harness is the infrastructure that wraps an LLM or AI Agent to control inputs and outputs, instrument the system for observation, run evaluations systematically, and manage tool calls, retries, and error handling.
+
+Without a harness, you are flying blind. You ship a prompt, get outputs, and have no structured way to know whether they degraded after a change, whether a tool call failed silently, or how your model compares to an earlier version. Harness engineering solves this.
+
+## Why harness engineering matters
+
+LLMs introduce challenges that break the assumptions of traditional software engineering:
+
+- **Non-determinism** — the same input can produce different outputs across runs, so you cannot rely on simple assertions.
+- **External side effects** — AI Agents interact with databases, APIs, and browsers; you need controlled environments to test these interactions safely.
+- **Graded quality** — evaluation is not binary. A response can be partially correct, stylistically wrong, or factually accurate but unhelpful. You need metrics, scoring, and comparison.
+- **Operational complexity** — production AI systems require monitoring, distributed tracing, cost tracking, and feedback loops that go beyond standard application monitoring.
+
+## Components of an AI harness
+
+<CardGroup cols={2}>
+  <Card title="Input controller" icon="sliders">
+    Manages what goes into the model. Handles prompt templates, context injection (RAG documents, memory), and system prompt versioning so you can track changes to inputs like code.
+  </Card>
+  <Card title="Output parser" icon="brackets-curly">
+    Extracts structured data from model output. Handles JSON extraction with retry on malformed output, schema validation, and confidence scoring to make model responses machine-readable.
+  </Card>
+  <Card title="Tool executor" icon="wrench">
+    Runs tool calls for AI Agents in a controlled environment. Provides sandboxed code execution, API call handling with timeouts and rate limits, and formats results back to the model.
+  </Card>
+  <Card title="Evaluator" icon="chart-bar">
+    Scores and measures output quality using LLM-as-judge, reference-based metrics (BLEU, ROUGE), task-specific metrics (accuracy, F1, exact match), and structured human feedback collection.
+  </Card>
+  <Card title="Tracer/observer" icon="binoculars">
+    Logs every input, output, and tool call. Tracks latency, token usage, and costs. Captures intermediate reasoning steps so you can debug non-deterministic failures after the fact.
+  </Card>
+</CardGroup>
+
+## Building a basic harness
+
+<Steps>
+  <Step title="Define your tools">
+    Identify every external action the agent can take — database queries, API calls, code execution — and wrap each one in a typed function with error handling. This boundary is where most production failures happen.
+  </Step>
+  <Step title="Wrap the LLM">
+    Build an input controller that owns all prompt construction. No prompt string should be built ad hoc in application code. Centralizing this gives you versioning, templating, and a single place to inject context.
+  </Step>
+  <Step title="Add tracing">
+    Log every LLM call with its full input, output, latency, and token count. Capture tool calls and their results as named spans in the trace. You will need this data to debug failures and measure cost.
+  </Step>
+  <Step title="Add evaluation">
+    Build a separate evaluation harness that runs your model against a held-out test set. Choose scoring strategies appropriate to your task — exact match, contains, or LLM-as-judge — and track metrics across versions.
+  </Step>
+</Steps>
+
+## Harness for AI Agents
+
+An agent harness manages the full loop: calling the model, parsing tool invocations, executing tools in a controlled environment, feeding results back, and stopping when the agent reaches a conclusion or hits a safety limit.
+
+```python
+from typing import Any, Callable, Optional
+import json
+
+class AIAgentHarness:
+    """
+    A harness that wraps an AI agent for controlled execution.
+    Handles tool calls, retries, and output parsing.
+    """
+
+    def __init__(
+        self,
+        llm: Any,                          # the underlying LLM
+        tools: dict[str, Callable],        # available tools (name -> function)
+        max_iterations: int = 10,           # prevent infinite loops
+        system_prompt: str = "",
+    ):
+        self.llm = llm
+        self.tools = tools
+        self.max_iterations = max_iterations
+        self.system_prompt = system_prompt
+        self.trace = []  # full execution trace for debugging
+
+    def run(self, user_input: str) -> dict:
+        """
+        Execute the agent with full tracing and error handling.
+        Returns the final answer and execution trace.
+        """
+        messages = [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": user_input},
+        ]
+
+        for iteration in range(self.max_iterations):
+            # Call the LLM
+            response = self.llm.chat(messages)
+            self.trace.append({"step": iteration, "response": response})
+
+            # Parse tool calls if present
+            tool_calls = self._parse_tool_calls(response)
+
+            if not tool_calls:
+                # No more tool calls — final answer
+                return {
+                    "answer": response,
+                    "trace": self.trace,
+                    "iterations": iteration + 1,
+                }
+
+            # Execute each tool call and feed results back
+            for tool_call in tool_calls:
+                tool_name = tool_call["name"]
+                tool_args = tool_call["arguments"]
+
+                if tool_name not in self.tools:
+                    result = f"Error: Unknown tool '{tool_name}'"
+                else:
+                    try:
+                        result = self.tools[tool_name](**tool_args)
+                    except Exception as e:
+                        result = f"Tool error: {str(e)}"
+
+                # Add tool result to conversation
+                messages.append({"role": "tool", "name": tool_name, "content": str(result)})
+                self.trace.append({"step": iteration, "tool": tool_name, "result": result})
+
+            messages.append({"role": "assistant", "content": response})
+
+        return {
+            "answer": "Max iterations reached",
+            "trace": self.trace,
+            "iterations": self.max_iterations,
+        }
+
+    def _parse_tool_calls(self, response: str) -> list:
+        """Extract structured tool calls from model response."""
+        try:
+            # Try to parse JSON tool calls (simplified)
+            if "```json" in response:
+                json_str = response.split("```json")[1].split("```")[0]
+                return json.loads(json_str)
+        except (json.JSONDecodeError, IndexError):
+            pass
+        return []
+```
+
+<Note>
+The `max_iterations` guard is not optional. Without a hard stop, a buggy tool or a confused model can loop indefinitely, burning tokens and money. Always set a sensible limit and surface the iteration count in your trace so you can detect agents that are running close to the ceiling.
+</Note>
+
+## Harness for evaluation
+
+An evaluation harness runs your model against a labeled dataset and produces aggregate metrics. It should be completely separate from your production harness — different configuration, different logging, and always run against a held-out test set the model has never influenced.
+
+```python
+from dataclasses import dataclass
+from typing import Optional
+import statistics
+
+@dataclass
+class EvaluationResult:
+    """Result for a single test case."""
+    input: str
+    expected: str
+    actual: str
+    score: float           # 0.0 to 1.0
+    passed: bool
+    reasoning: Optional[str] = None  # LLM-as-judge explanation
+
+class EvaluationHarness:
+    """
+    Run systematic evaluations of an LLM or AI Agent.
+    Supports multiple scoring strategies.
+    """
+
+    def __init__(self, model, judge_model=None):
+        self.model = model
+        self.judge_model = judge_model  # LLM used to score outputs (LLM-as-judge)
+
+    def evaluate_dataset(
+        self,
+        test_cases: list[dict],
+        scoring_fn: str = "exact_match",
+    ) -> dict:
+        """
+        Run model on all test cases and collect metrics.
+        scoring_fn: 'exact_match', 'contains', 'llm_judge'
+        """
+        results = []
+
+        for case in test_cases:
+            actual = self.model.generate(case["input"])
+            score, reasoning = self._score(
+                actual, case["expected"], scoring_fn
+            )
+            results.append(EvaluationResult(
+                input=case["input"],
+                expected=case["expected"],
+                actual=actual,
+                score=score,
+                passed=score >= 0.5,
+                reasoning=reasoning,
+            ))
+
+        scores = [r.score for r in results]
+        return {
+            "total": len(results),
+            "passed": sum(r.passed for r in results),
+            "mean_score": statistics.mean(scores),
+            "pass_rate": sum(r.passed for r in results) / len(results),
+            "results": results,
+        }
+
+    def _score(self, actual: str, expected: str, method: str):
+        if method == "exact_match":
+            match = actual.strip().lower() == expected.strip().lower()
+            return (1.0 if match else 0.0), None
+
+        elif method == "contains":
+            contains = expected.lower() in actual.lower()
+            return (1.0 if contains else 0.0), None
+
+        elif method == "llm_judge" and self.judge_model:
+            prompt = f"""Rate how well the actual answer matches the expected answer.
+Expected: {expected}
+Actual: {actual}
+Score from 0.0 to 1.0. Respond with JSON: {{"score": 0.8, "reasoning": "..."}}"""
+            response = self.judge_model.generate(prompt)
+            import json
+            result = json.loads(response)
+            return result["score"], result.get("reasoning")
+
+        return 0.0, None
+```
+
+<Tip>
+LLM-as-judge is one of the most powerful evaluation techniques for open-ended tasks where reference-based metrics fall short. A model asked to summarize a document can produce a correct summary that shares no words with the reference. Exact match or ROUGE will score it as zero; a judge model that understands the content will score it accurately. Use LLM-as-judge when your task has multiple valid outputs and you care about semantic quality, not surface-level similarity.
+</Tip>
+
+## Best practices
+
+<AccordionGroup>
+  <Accordion title="Version your prompts like code">
+    Prompts are not configuration — they are the primary interface to your model and have an outsized effect on output quality. Store them in version control, review changes in pull requests, and tag the prompt version in every evaluation run so you can always trace a quality regression to a specific change.
+  </Accordion>
+  <Accordion title="Log everything during development">
+    Every LLM call should produce a structured log entry: the full input, full output, latency, token counts, and cost. During development this feels like overkill; when you hit a production failure at 2am with no trace, you will wish you had it. Tracing infrastructure is much harder to add retroactively.
+  </Accordion>
+  <Accordion title="Use deterministic seeds for reproducibility">
+    When running evaluations, set a fixed temperature and, where your provider supports it, a fixed seed. This reduces variance across evaluation runs so that score changes reflect real model or prompt changes rather than sampling noise. Reserve stochastic sampling for production.
+  </Accordion>
+  <Accordion title="Separate your evaluation harness from your production harness">
+    Your production harness is optimized for latency, reliability, and cost. Your evaluation harness is optimized for thoroughness and reproducibility. Mixing the two creates incentives to cut corners in evaluation (skip slow judge calls, reduce dataset size) and can let production concerns contaminate your metrics.
+  </Accordion>
+  <Accordion title="Always evaluate on a held-out test set">
+    Never run evaluations on examples the model or your prompt engineering has been exposed to. The signal you care about is generalization — how the system performs on inputs it has not seen. A test set that leaks into development is no longer a test set.
+  </Accordion>
+  <Accordion title="Use multiple evaluation metrics">
+    No single metric captures everything. Exact match misses semantically correct paraphrases. ROUGE rewards n-gram overlap but not coherence. LLM-as-judge can be biased toward confident-sounding outputs. Use at least two complementary metrics, and track human agreement with your automated scores to calibrate your evaluation harness over time.
+  </Accordion>
+</AccordionGroup>
+
+## Putting it all together
+
+A production AI system is not just a model — it is a model surrounded by infrastructure that controls its inputs, observes its behavior, executes its tool calls safely, and continuously measures its quality. Harness engineering is what makes that infrastructure deliberate rather than accidental.
+
+Start with an agent harness that adds tracing and a tool executor. Add an evaluation harness early, before you have a large dataset, and grow your test cases alongside your feature development. Version your prompts from day one. The investment compounds: every trace you capture becomes a potential test case, every evaluation run gives you a baseline to defend, and every prompt version gives you a history to diff when quality changes.

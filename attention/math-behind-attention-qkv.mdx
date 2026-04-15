@@ -1,0 +1,231 @@
+---
+title: "Attention Mechanism: Math Behind Query, Key, and Value"
+description: "A step-by-step walkthrough of how the attention mechanism computes Q, K, and V matrices and produces context-aware token representations."
+---
+
+The attention mechanism is the core operation that lets a language model decide how much each token should influence every other token when building its representation. Given a sequence of input vectors, it produces a new set of vectors where each one is a weighted blend of the values in the sequence — with weights determined by how relevant each position is to every other. Understanding this computation in full numeric detail is the fastest path to understanding Transformers.
+
+<Note>
+This page covers **scaled dot-product attention**, the fundamental building block of every Transformer model. The full formula is:
+
+```
+Attention(Q, K, V) = softmax(Q·K^T / √d_k) · V
+```
+</Note>
+
+## The attention formula
+
+At its core, attention takes three matrices — Queries (Q), Keys (K), and Values (V) — and computes:
+
+```
+Attention(Q, K, V) = softmax(Q · K^T / √d_k) · V
+```
+
+- **Q (Query)**: what each token is looking for
+- **K (Key)**: what each token is advertising about itself
+- **V (Value)**: the actual content each token contributes to the output
+- **d_k**: the dimension of the query and key vectors (used for scaling)
+
+## Setting up: from words to vectors
+
+Before attention can run, each token in the input sequence must be represented as a fixed-size embedding vector. In real models these are high-dimensional (768, 1024, etc.), but to make the math concrete we will use 4-dimensional vectors for a 3-token sequence: `"The cat sat"`.
+
+| Token | Embedding vector |
+|-------|-----------------|
+| The   | [1, 0, 1, 0]    |
+| cat   | [0, 1, 0, 1]    |
+| sat   | [1, 1, 0, 0]    |
+
+Stacked into a matrix X of shape (3, 4):
+
+```
+X = [[1, 0, 1, 0],
+     [0, 1, 0, 1],
+     [1, 1, 0, 0]]
+```
+
+## Creating Q, K, and V matrices
+
+Each of Q, K, and V is produced by multiplying the input matrix X by a learned weight matrix:
+
+```
+Q = X · W_Q
+K = X · W_K
+V = X · W_V
+```
+
+In this example we use identity matrices for W_Q, W_K, and W_V (shape 4×4) so the math stays readable without losing any conceptual content. In practice these weight matrices are trained parameters.
+
+```
+Q = X · I₄ = X
+K = X · I₄ = X
+V = X · I₄ = X
+```
+
+So Q, K, and V are all equal to X here:
+
+```
+Q = K = V = [[1, 0, 1, 0],
+              [0, 1, 0, 1],
+              [1, 1, 0, 0]]
+```
+
+## Step-by-step attention computation
+
+<Steps>
+  <Step title="Compute raw attention scores: Q · K^T">
+    Multiply Q by the transpose of K. The result is a (3 × 3) matrix where entry [i, j] measures how much token i attends to token j.
+
+    ```
+    scores = Q · K^T
+
+    K^T = [[1, 0, 1],
+           [0, 1, 1],
+           [1, 0, 0],
+           [0, 1, 0]]
+
+    scores[0, 0] = [1,0,1,0]·[1,0,1,0] = 1+0+1+0 = 2
+    scores[0, 1] = [1,0,1,0]·[0,1,0,1] = 0+0+0+0 = 0
+    scores[0, 2] = [1,0,1,0]·[1,1,0,0] = 1+0+0+0 = 1
+
+    scores = [[2, 0, 1],
+              [0, 2, 1],
+              [1, 1, 2]]
+    ```
+
+    Each row corresponds to one query token; each column corresponds to one key token.
+  </Step>
+
+  <Step title="Scale the scores by 1/√d_k">
+    With d_k = 4, the scaling factor is 1/√4 = 0.5. Dividing by this factor keeps the dot product values from growing too large before softmax.
+
+    ```
+    scores_scaled = scores * 0.5
+
+    scores_scaled = [[1.0, 0.0, 0.5],
+                     [0.0, 1.0, 0.5],
+                     [0.5, 0.5, 1.0]]
+    ```
+  </Step>
+
+  <Step title="Apply softmax row-wise to get attention weights">
+    Softmax converts each row of raw scores into a probability distribution — all values positive and summing to 1. Higher scores get exponentially more weight.
+
+    For row 0 (token "The"):
+    ```
+    e^1.0 = 2.718,  e^0.0 = 1.0,  e^0.5 = 1.649
+    sum   = 5.367
+    weights[0] = [0.506, 0.186, 0.307]
+    ```
+
+    For row 1 (token "cat"):
+    ```
+    e^0.0 = 1.0,  e^1.0 = 2.718,  e^0.5 = 1.649
+    sum   = 5.367
+    weights[1] = [0.186, 0.506, 0.307]
+    ```
+
+    For row 2 (token "sat"):
+    ```
+    e^0.5 = 1.649, e^0.5 = 1.649, e^1.0 = 2.718
+    sum   = 6.016
+    weights[2] = [0.274, 0.274, 0.452]
+    ```
+
+    Final attention weight matrix:
+    ```
+    attention_weights ≈ [[0.506, 0.186, 0.307],
+                         [0.186, 0.506, 0.307],
+                         [0.274, 0.274, 0.452]]
+    ```
+  </Step>
+
+  <Step title="Compute the output: attention_weights · V">
+    Multiply the attention weight matrix by V. Each output row is a weighted combination of all value rows — which means each token's new representation is an informed blend of every other token's content, weighted by relevance.
+
+    Output row for "The":
+    ```
+    output[0] = 0.506·[1,0,1,0] + 0.186·[0,1,0,1] + 0.307·[1,1,0,0]
+              = [0.506,0,0.506,0] + [0,0.186,0,0.186] + [0.307,0.307,0,0]
+              ≈ [0.813, 0.493, 0.506, 0.186]
+    ```
+
+    The full output matrix has shape (3, 4) — one 4-dimensional vector per token, now enriched with context from the whole sequence.
+  </Step>
+
+  <Step title="Putting it all together">
+    The five operations chain directly:
+
+    ```
+    1. Q = X · W_Q
+    2. K = X · W_K
+    3. V = X · W_V
+    4. scores = Q · K^T / √d_k
+    5. output = softmax(scores) · V
+    ```
+
+    The output feeds into the next sublayer of the Transformer (a feed-forward network), carrying context-aware representations of every token.
+  </Step>
+</Steps>
+
+## Full Python implementation
+
+```python
+import numpy as np
+
+# Token embeddings (3 tokens, 4-dim)
+X = np.array([
+    [1, 0, 1, 0],  # "The"
+    [0, 1, 0, 1],  # "cat"
+    [1, 1, 0, 0],  # "sat"
+], dtype=float)
+
+# Simplified weight matrices (4x4, using identity-like for clarity)
+d_k = 4
+W_Q = np.eye(4)
+W_K = np.eye(4)
+W_V = np.eye(4)
+
+# Compute Q, K, V
+Q = X @ W_Q
+K = X @ W_K
+V = X @ W_V
+
+# Attention scores
+scores = Q @ K.T  # shape: (3, 3)
+
+# Scale
+scores_scaled = scores / np.sqrt(d_k)
+
+# Softmax
+def softmax(x):
+    e_x = np.exp(x - x.max(axis=-1, keepdims=True))
+    return e_x / e_x.sum(axis=-1, keepdims=True)
+
+attention_weights = softmax(scores_scaled)
+
+# Output
+output = attention_weights @ V
+
+print("Attention weights:\n", attention_weights)
+print("Output:\n", output)
+```
+
+Running this produces:
+
+```
+Attention weights:
+ [[0.506 0.186 0.307]
+  [0.186 0.506 0.307]
+  [0.274 0.274 0.452]]
+Output:
+ [[0.813 0.493 0.506 0.186]
+  [0.493 0.813 0.186 0.506]
+  [0.726 0.726 0.274 0.274]]
+```
+
+Notice that the attention weight matrix is symmetric here only because we used identity weight matrices. With trained W_Q and W_K, Q ≠ K and the weights become asymmetric — capturing directional relationships between tokens.
+
+<Tip>
+**Multi-head attention** extends this by running the above computation `h` times in parallel, each with its own learned W_Q, W_K, and W_V matrices (projected to smaller dimension d_k/h). The outputs of all heads are concatenated and projected back to the model dimension. This lets the model attend to different aspects of the sequence simultaneously — for example, one head might track syntactic dependencies while another tracks semantic similarity.
+</Tip>

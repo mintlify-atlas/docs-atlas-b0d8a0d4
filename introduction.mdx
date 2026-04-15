@@ -1,0 +1,40 @@
+---
+title: "LLM Internals: A Deep Dive into How Large LLMs Work"
+description: "Step-by-step learning resource for engineers and ML practitioners who want to understand LLM internals — from tokenization to inference optimization."
+---
+
+LLM Internals is a structured learning resource that takes you from the first principles of how a large language model processes text all the way through to the techniques that make inference fast at scale. Built by [Amit Shekhar](https://x.com/amitiitbhu), Founder of Outcome School, the resource is designed for engineers, developers, and ML practitioners who want to move beyond using LLMs as black boxes and understand exactly what is happening inside them.
+
+## What this resource covers
+
+Each section focuses on one layer of the stack — starting with how raw text becomes tokens, building up through the attention mechanism and transformer architecture, and finishing with the inference optimization techniques that power production LLM deployments.
+
+<CardGroup cols={2}>
+  <Card title="Tokenization" icon="scissors" href="/tokenization/overview">
+    Learn how raw text is split into tokens and how the Byte Pair Encoding algorithm builds a vocabulary from scratch.
+  </Card>
+  <Card title="Attention Mechanism" icon="eye" href="/attention/math-behind-attention-qkv">
+    Work through the math behind Query, Key, and Value matrices — the core computation inside every Transformer layer.
+  </Card>
+  <Card title="Transformer Architecture" icon="network-wired" href="/transformer/architecture">
+    Decode the full Transformer piece by piece: embeddings, positional encoding, multi-head attention, feed-forward networks, and residual connections.
+  </Card>
+  <Card title="Inference Optimization" icon="bolt" href="/inference/kv-cache">
+    Explore KV Cache, Paged Attention, Flash Attention, and Mixture of Experts — the techniques that make large models fast and memory-efficient.
+  </Card>
+  <Card title="AI Engineering" icon="wrench" href="/ai-engineering/harness-engineering">
+    Learn about Harness Engineering: the scaffolding layer that connects LLMs to agents, tools, and evaluation pipelines.
+  </Card>
+</CardGroup>
+
+## How to use this resource
+
+You can work through the topics in order for a complete picture of how LLMs work, or jump directly to the section most relevant to what you are building or learning right now.
+
+<Tip>
+  If you are new to LLMs, start with the [What Is an LLM?](/what-is-llm) page to get a grounding in the key concepts before diving into internals.
+</Tip>
+
+<Note>
+  This resource is actively maintained and grows over time. New topics covering LLM training, evaluation, and emerging architectures are added as new blogs and videos are published.
+</Note>

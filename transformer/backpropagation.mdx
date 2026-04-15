@@ -1,0 +1,215 @@
+---
+title: "Backpropagation: The Math Behind Neural Network Training"
+description: "A step-by-step walkthrough of backpropagation — the chain rule, a fully worked numeric example, weight updates, and gradient descent in Python."
+---
+
+Backpropagation is the algorithm that makes neural network training possible. It computes the gradient of the loss with respect to every weight in the network in a single backward pass, allowing the optimizer to nudge each weight in the direction that reduces the loss. Without it, training a deep network would require computing gradients for each weight independently, which would be computationally intractable. Understanding backpropagation means understanding exactly how a neural network learns from its mistakes.
+
+## What is backpropagation?
+
+A neural network is a composition of functions — layers of linear transformations followed by non-linearities. During training, you feed in an input, compute a prediction, measure the error against the true label using a loss function, and then need to figure out how much each weight contributed to that error. Backpropagation answers this question efficiently by applying the chain rule of calculus in reverse through the network, propagating gradients from the output layer back to the input layer.
+
+The result is a gradient for every parameter: a number that tells you whether increasing that weight would increase or decrease the loss, and by how much (locally). The optimizer then uses these gradients to update the weights.
+
+## The chain rule of calculus
+
+For a single composed function, the chain rule states:
+
+```
+dL/dw = dL/dz · dz/dw
+```
+
+For a two-layer network with intermediate activations, this extends to:
+
+```
+dL/dw₁ = dL/dz₂ · dz₂/da₁ · da₁/dz₁ · dz₁/dw₁
+```
+
+Each term in this product is a local derivative that can be computed at the corresponding layer. Backpropagation works by computing these local derivatives during the backward pass and multiplying them together via the chain rule to get the gradient with respect to weights deep in the network.
+
+The key insight is that intermediate results computed during the forward pass can be reused during the backward pass. Each gradient is computed once and passed backward — this is why backpropagation is efficient rather than recomputing from scratch for each weight.
+
+## The training loop
+
+<Steps>
+  <Step title="Forward pass">
+    Feed the input through the network layer by layer, computing pre-activations, activations, and finally the prediction. Store the intermediate values — you will need them during the backward pass.
+  </Step>
+  <Step title="Compute the loss">
+    Measure how far the prediction is from the true label using a loss function. For classification, binary cross-entropy or categorical cross-entropy is typical. For regression, mean squared error is common.
+  </Step>
+  <Step title="Backward pass (backpropagation)">
+    Starting from the loss, compute the gradient of the loss with respect to each layer's output, then with respect to its weights and biases, using the chain rule. Pass the gradient backward through each layer in turn.
+  </Step>
+  <Step title="Update weights">
+    Use the computed gradients to update every weight and bias in the network. In gradient descent, each parameter moves a small step in the direction that decreases the loss: `w ← w - lr · dL/dw`.
+  </Step>
+</Steps>
+
+## A complete worked example
+
+The following example uses a two-layer network for binary classification. The network takes a 2-dimensional input, passes it through a hidden layer with ReLU activation, and produces a scalar output with sigmoid activation. The loss is binary cross-entropy.
+
+### Step 1 — Forward pass
+
+```python
+import numpy as np
+
+def sigmoid(z):
+    return 1 / (1 + np.exp(-z))
+
+def relu(z):
+    return np.maximum(0, z)
+
+def relu_derivative(z):
+    return (z > 0).astype(float)
+
+# Network parameters
+x = np.array([1.0, 0.5])
+y = 1.0  # true label
+
+# Layer 1 weights (2 inputs → 2 hidden units)
+W1 = np.array([[0.5, -0.3],
+               [0.2,  0.8]])
+b1 = np.array([0.1, -0.1])
+
+# Layer 2 weights (2 hidden → 1 output)
+W2 = np.array([0.6, -0.4])
+b2 = 0.2
+
+# Forward pass
+z1 = W1 @ x + b1          # pre-activation, hidden layer
+a1 = relu(z1)              # activation, hidden layer
+z2 = W2 @ a1 + b2          # pre-activation, output layer
+y_hat = sigmoid(z2)        # predicted probability
+
+# Loss: Binary cross-entropy
+loss = -(y * np.log(y_hat) + (1 - y) * np.log(1 - y_hat))
+print(f"y_hat = {y_hat:.4f}, loss = {loss:.4f}")
+```
+
+Walking through the arithmetic:
+- `z1 = W1 @ [1.0, 0.5] + b1 = [0.5*1 + 0.2*0.5 + 0.1, -0.3*1 + 0.8*0.5 - 0.1] = [0.7, 0.3]`
+- `a1 = relu([0.7, 0.3]) = [0.7, 0.3]` (both positive, no change)
+- `z2 = 0.6*0.7 + (-0.4)*0.3 + 0.2 = 0.42 - 0.12 + 0.2 = 0.5`
+- `y_hat = sigmoid(0.5) ≈ 0.6225`
+- `loss = -log(0.6225) ≈ 0.475`
+
+### Step 2 — Backward pass
+
+```python
+# Gradients — backward pass
+lr = 0.1  # learning rate
+
+# Output layer gradients
+dL_dyhat = -(y / y_hat) + (1 - y) / (1 - y_hat)
+dyhat_dz2 = y_hat * (1 - y_hat)        # sigmoid derivative
+dL_dz2 = dL_dyhat * dyhat_dz2
+
+dL_dW2 = dL_dz2 * a1                   # gradient w.r.t W2
+dL_db2 = dL_dz2                         # gradient w.r.t b2
+dL_da1 = dL_dz2 * W2                    # pass gradient to hidden layer
+
+# Hidden layer gradients
+dL_dz1 = dL_da1 * relu_derivative(z1)
+dL_dW1 = np.outer(dL_dz1, x)           # outer product
+dL_db1 = dL_dz1
+
+# Weight update (gradient descent)
+W1 -= lr * dL_dW1
+b1 -= lr * dL_db1
+W2 -= lr * dL_dW2
+b2 -= lr * dL_db2
+```
+
+Each gradient is derived directly from the chain rule:
+
+- `dL/dz2 = (y_hat - y)` — the derivative of binary cross-entropy composed with sigmoid simplifies neatly to this.
+- `dL/dW2 = dL/dz2 · a1` — the weight gradient is the upstream gradient times the layer's input.
+- `dL/da1 = dL/dz2 · W2` — to propagate the gradient further back, multiply by the weight matrix.
+- `dL/dz1 = dL/da1 · relu'(z1)` — the ReLU derivative is 1 where the pre-activation was positive, 0 otherwise.
+- `dL/dW1 = outer(dL/dz1, x)` — the outer product gives the gradient for each weight `W1[i,j]` as `dL/dz1[i] * x[j]`.
+
+After one update step with `lr = 0.1`, all weights move slightly in the direction that would have reduced the loss. Running this loop over many examples and many epochs is how the network learns.
+
+## Why backpropagation is efficient
+
+A naive approach to computing gradients would be to perturb each weight by a tiny amount and observe the change in loss — numerical differentiation. For a model with millions of parameters, this requires millions of forward passes, which is completely impractical. Backpropagation computes the exact gradient for all parameters in a single backward pass, roughly the same cost as one forward pass. This is possible because the chain rule lets us reuse intermediate computations: each node in the computation graph contributes exactly once to the gradient of every parameter upstream of it.
+
+## SGD, mini-batch gradient descent, and Adam
+
+**Vanilla SGD (Stochastic Gradient Descent)** updates weights after each single training example. This is noisy — the gradient from one example may point in a slightly wrong direction — but it can converge faster in practice and escapes local minima more easily than full-batch gradient descent.
+
+**Mini-batch gradient descent** averages gradients over a small batch (typically 32–512 examples) before updating weights. This reduces noise while remaining computationally efficient on GPUs, which process batches efficiently via parallelism. Nearly all practical neural network training uses mini-batch gradient descent.
+
+**Adam (Adaptive Moment Estimation)** is the standard optimizer for most deep learning today. Instead of using the raw gradient, Adam maintains running estimates of the first moment (mean of recent gradients) and second moment (mean of recent squared gradients), and uses these to adaptively scale the learning rate per parameter. Parameters with historically large gradients receive smaller updates; parameters with small gradients receive larger updates. This adaptive scaling makes Adam far more robust than vanilla SGD across different architectures and tasks.
+
+<Note>
+  In practice, you never implement backpropagation manually. Frameworks like **PyTorch** and **JAX** compute gradients automatically via reverse-mode automatic differentiation (autograd). You define the forward pass, call `.backward()` (PyTorch) or use `jax.grad`, and the framework handles the entire backward pass. The implementation here is for conceptual clarity — understanding what autograd is doing internally.
+</Note>
+
+<Tip>
+  **Numerical gradient checking** is a useful debugging technique when implementing custom layers or loss functions. Compute the numerical gradient by perturbing each weight by a small `ε` and measuring `(L(w + ε) - L(w - ε)) / (2ε)`. Compare this to your analytical gradient. If they match to within ~1e-5 relative error, your backpropagation implementation is likely correct. PyTorch provides `torch.autograd.gradcheck` for this purpose.
+</Tip>
+
+## Full training loop
+
+Putting it together: a complete training loop runs forward pass → loss → backward pass → weight update repeatedly over the dataset until the loss converges.
+
+```python
+import numpy as np
+
+def sigmoid(z):
+    return 1 / (1 + np.exp(-z))
+
+def relu(z):
+    return np.maximum(0, z)
+
+def relu_derivative(z):
+    return (z > 0).astype(float)
+
+def train_step(x, y, W1, b1, W2, b2, lr=0.01):
+    """One forward + backward pass and weight update."""
+    # Forward pass
+    z1 = W1 @ x + b1
+    a1 = relu(z1)
+    z2 = W2 @ a1 + b2
+    y_hat = sigmoid(z2)
+
+    # Loss
+    loss = -(y * np.log(y_hat + 1e-8) + (1 - y) * np.log(1 - y_hat + 1e-8))
+
+    # Backward pass
+    dL_dz2 = y_hat - y                     # simplified BCE + sigmoid gradient
+    dL_dW2 = dL_dz2 * a1
+    dL_db2 = dL_dz2
+    dL_da1 = dL_dz2 * W2
+    dL_dz1 = dL_da1 * relu_derivative(z1)
+    dL_dW1 = np.outer(dL_dz1, x)
+    dL_db1 = dL_dz1
+
+    # Weight update
+    W1 -= lr * dL_dW1
+    b1 -= lr * dL_db1
+    W2 -= lr * dL_dW2
+    b2 -= lr * dL_db2
+
+    return loss, W1, b1, W2, b2
+
+# Initialize
+np.random.seed(42)
+W1 = np.random.randn(2, 2) * 0.1
+b1 = np.zeros(2)
+W2 = np.random.randn(2) * 0.1
+b2 = 0.0
+
+x = np.array([1.0, 0.5])
+y = 1.0
+
+for epoch in range(100):
+    loss, W1, b1, W2, b2 = train_step(x, y, W1, b1, W2, b2, lr=0.1)
+    if epoch % 20 == 0:
+        print(f"Epoch {epoch:3d}: loss = {loss:.4f}")
+```
+
+Running this loop 100 times on a single example will drive the loss close to zero as the network fits that one data point. In real training you would iterate over a full dataset and evaluate on a held-out validation set to detect overfitting.
